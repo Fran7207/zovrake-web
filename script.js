@@ -13,60 +13,60 @@ const googleButton = document.getElementById("google-login");
 
 continueButton.addEventListener("click", function () {
 
-    /* Ocultar HERO */
     heroSection.style.display = "none";
 
-    /* Mostrar AUTH SCREEN */
     authScreen.classList.add("active");
 
 });
 
-
 /* ==========================
-   CUANDO CARGUE LA PÁGINA
+   CARGAR GOOGLE
 ========================== */
 
 window.onload = function () {
 
-    if (typeof google !== "undefined") {
+    google.accounts.id.initialize({
 
-        google.accounts.id.initialize({
+        client_id: "220193972804-rcg4hvpm8rd94ls04ppuq3a6u68jdd2g.apps.googleusercontent.com",
 
-            client_id: "220193972804-rcg4hvpm8rd94ls04ppuq3a6u68jdd2g.apps.googleusercontent.com",
+        callback: handleCredentialResponse
 
-            callback: handleCredentialResponse
+    });
 
-        });
+    google.accounts.id.renderButton(
 
-        console.log("Google cargado correctamente.");
+        document.getElementById("google-button-container"),
 
-    } else {
+        {
+            theme: "outline",
+            size: "large"
+        }
 
-        console.error("La librería de Google no se cargó.");
-
-    }
+    );
 
 };
 
-
 /* ==========================
-   BOTÓN GOOGLE
+   BOTÓN PERSONALIZADO
 ========================== */
 
 googleButton.addEventListener("click", function () {
 
-    if (typeof google !== "undefined") {
+    const officialButton = document.querySelector(
+        "#google-button-container div[role='button']"
+    );
 
-        google.accounts.id.prompt();
+    if (officialButton) {
+
+        officialButton.click();
 
     } else {
 
-        alert("Google todavía no está listo. Recarga la página.");
+        alert("Google todavía no está listo.");
 
     }
 
 });
-
 
 /* ==========================
    RESPUESTA DE GOOGLE
