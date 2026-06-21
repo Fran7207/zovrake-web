@@ -57,10 +57,8 @@ googleButton.addEventListener("click", async () => {
 
         options: {
 
-        redirectTo:
-window.location.origin
-
-   
+            redirectTo:
+            "https://zovrake-web.vercel.app"
 
         }
 
