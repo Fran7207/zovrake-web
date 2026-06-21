@@ -1,17 +1,41 @@
 /* ==========================
+   SUPABASE
+========================== */
+
+const SUPABASE_URL =
+"https://jbvuufbaipjxgcpfvunz.supabase.co";
+
+const SUPABASE_KEY =
+"sb_publishable_YTA9ngImZJ--TLdNhTod4w_yJxP_geE";
+
+const supabaseClient = supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_KEY
+);
+
+
+/* ==========================
    ELEMENTOS DEL DOM
 ========================== */
 
-const continueButton = document.getElementById("continue-zovrake");
-const heroSection = document.querySelector(".hero");
-const authScreen = document.querySelector(".auth-screen");
-const googleButton = document.getElementById("google-login");
+const continueButton =
+document.getElementById("continue-zovrake");
+
+const heroSection =
+document.querySelector(".hero");
+
+const authScreen =
+document.querySelector(".auth-screen");
+
+const googleButton =
+document.getElementById("google-login");
+
 
 /* ==========================
    BOTÓN CONTINUAR
 ========================== */
 
-continueButton.addEventListener("click", function () {
+continueButton.addEventListener("click", () => {
 
     heroSection.style.display = "none";
 
@@ -19,63 +43,64 @@ continueButton.addEventListener("click", function () {
 
 });
 
+
 /* ==========================
-   CARGAR GOOGLE
+   LOGIN CON GOOGLE
 ========================== */
 
-window.onload = function () {
+googleButton.addEventListener("click", async () => {
 
-    google.accounts.id.initialize({
+    const { error } =
+    await supabaseClient.auth.signInWithOAuth({
 
-        client_id: "220193972804-rcg4hvpm8rd94ls04ppuq3a6u68jdd2g.apps.googleusercontent.com",
+        provider: "google",
 
-        callback: handleCredentialResponse
+        options: {
+
+        redirectTo:
+window.location.origin
+
+   
+
+        }
 
     });
 
-    google.accounts.id.renderButton(
+    if (error) {
 
-        document.getElementById("google-button-container"),
+        console.error(error);
 
-        {
-            theme: "outline",
-            size: "large"
-        }
-
-    );
-
-};
-
-/* ==========================
-   BOTÓN PERSONALIZADO
-========================== */
-
-googleButton.addEventListener("click", function () {
-
-    const officialButton = document.querySelector(
-        "#google-button-container div[role='button']"
-    );
-
-    if (officialButton) {
-
-        officialButton.click();
-
-    } else {
-
-        alert("Google todavía no está listo.");
+        alert("Error al iniciar sesión.");
 
     }
 
 });
 
+
 /* ==========================
-   RESPUESTA DE GOOGLE
+   COMPROBAR SESIÓN
 ========================== */
 
-function handleCredentialResponse(response) {
+window.addEventListener("load", async () => {
 
-    console.log("Inicio de sesión exitoso");
+    const {
+        data: { session }
+    } = await supabaseClient.auth.getSession();
+if (session) {
 
-    console.log(response);
+    console.log("Usuario autenticado:");
+
+    console.log(session.user);
+
+} else {
+
+    console.log("No hay sesión activa.");
 
 }
+
+    /*
+    AQUÍ MÁS ADELANTE
+    ENTRARÁ AL DASHBOARD
+    */
+
+});
