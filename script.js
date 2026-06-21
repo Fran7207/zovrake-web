@@ -84,21 +84,50 @@ window.addEventListener("load", async () => {
     const {
         data: { session }
     } = await supabaseClient.auth.getSession();
-if (session) {
 
-    console.log("Usuario autenticado:");
+    if (session) {
 
-    console.log(session.user);
+        console.log("Usuario autenticado:");
+        console.log(session.user);
 
-} else {
+        /* Nunca volver al Hero */
+        heroSection.style.display = "none";
 
-    console.log("No hay sesión activa.");
+        /* Mantener el flujo después del login */
+        authScreen.classList.add("active");
 
-}
+        alert("Sesión iniciada correctamente");
 
-    /*
-    AQUÍ MÁS ADELANTE
-    ENTRARÁ AL DASHBOARD
-    */
+    } else {
+
+        console.log("No hay sesión activa.");
+
+    }
 
 });
+
+
+/* ==========================
+   ESCUCHAR LOGIN
+========================== */
+
+supabaseClient.auth.onAuthStateChange(
+    (event, session) => {
+
+        if (session) {
+
+            console.log(
+                "Sesión detectada:",
+                event
+            );
+
+            /* Nunca volver al Hero */
+            heroSection.style.display = "none";
+
+            /* Mantener el flujo */
+            authScreen.classList.add("active");
+
+        }
+
+    }
+);
