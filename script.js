@@ -149,9 +149,12 @@ supabaseClient.auth.onAuthStateChange((event, session) => {
     if (!domListo) return;
 
     if (session) {
-        console.log("[Zovrake] Usuario autenticado:", session.user.email);
-        ocultarPantallaAuth();
-    } else {
+    console.log("[Zovrake] Usuario autenticado:", session.user.email);
+
+    console.log(
+        "[Zovrake] Esperando la siguiente estructura."
+    );
+} else {
         console.log("[Zovrake] Sin sesión activa.");
     }
 });
