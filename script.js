@@ -94,6 +94,11 @@ function ocultarPantallaAuth() {
 //funciones de Fase 2.
 
 function mostrarOnboarding(email) {
+
+    dom.heroSection.style.display = "none";
+
+    dom.authScreen.style.display = "none";
+
     dom.authScreen.classList.remove("active");
 
     dom.onboardingScreen.classList.add("active");
