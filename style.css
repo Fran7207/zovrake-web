@@ -479,3 +479,337 @@ body{
         font-size: 26px;
     }
 }
+
+/* ==========================
+   FASE 2 - CREAR CUENTA
+========================== */
+
+.onboarding-screen{
+    display: none;
+
+    min-height: 100vh;
+
+    background: #0B0B0B;
+
+    padding: 40px 20px;
+}
+
+.onboarding-screen.active{
+    display: flex;
+
+    justify-content: center;
+    align-items: center;
+}
+
+.onboarding-card{
+    width: 100%;
+    max-width: 520px;
+
+    background: #FFFFFF;
+
+    border-radius: 24px;
+
+    padding: 50px 40px;
+
+    box-shadow: 0 20px 50px rgba(0,0,0,0.30);
+}
+
+.onboarding-logo{
+    display: flex;
+
+    align-items: center;
+
+    gap: 12px;
+
+    margin-bottom: 30px;
+}
+
+.logo-z{
+    color: #D4AF37;
+
+    font-size: 34px;
+
+    font-weight: 700;
+}
+
+.logo-text{
+    color: #D4AF37;
+
+    font-size: 28px;
+
+    font-weight: 700;
+
+    letter-spacing: 4px;
+}
+
+.onboarding-title{
+    color: #000000;
+
+    font-size: 34px;
+
+    font-weight: 700;
+
+    margin-bottom: 15px;
+}
+
+.onboarding-description{
+    color: #666666;
+
+    font-size: 16px;
+
+    line-height: 1.6;
+
+    margin-bottom: 30px;
+}
+
+.checkbox-item{
+    display: flex;
+
+    align-items: flex-start;
+
+    gap: 12px;
+
+    margin-bottom: 20px;
+
+    color: #333333;
+
+    line-height: 1.5;
+
+    cursor: pointer;
+}
+
+.checkbox-item input{
+    margin-top: 4px;
+}
+
+.checkbox-note{
+    color: #777777;
+
+    font-size: 13px;
+
+    margin-bottom: 30px;
+}
+
+.create-account-button{
+    width: 100%;
+
+    background: #D4AF37;
+
+    color: #000000;
+
+    border: none;
+
+    border-radius: 12px;
+
+    padding: 16px;
+
+    font-size: 16px;
+
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition: 0.3s;
+
+    margin-bottom: 30px;
+}
+
+.create-account-button:hover:not(:disabled){
+    background: #F4D67A;
+
+    transform: translateY(-2px);
+}
+
+.create-account-button:disabled{
+    opacity: 0.5;
+
+    cursor: not-allowed;
+}
+
+.session-info{
+    text-align: center;
+
+    margin-bottom: 20px;
+}
+
+.session-info p{
+    color: #666666;
+
+    margin-bottom: 8px;
+}
+
+.session-info strong{
+    color: #000000;
+}
+
+.change-email-button{
+    background: none;
+
+    border: none;
+
+    color: #D4AF37;
+
+    font-size: 15px;
+
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition: 0.3s;
+ text-decoration: underline;
+}
+
+.change-email-button:hover{
+    opacity: 0.8;
+}
+
+/* ==========================
+   CONFIRMACIÓN CAMBIAR CUENTA
+========================== */
+
+.change-account-modal{
+    display: none;
+
+    min-height: 100vh;
+
+    background: rgba(0,0,0,0.80);
+
+    padding: 40px 20px;
+}
+
+.change-account-modal.active{
+    display: flex;
+
+    justify-content: center;
+    align-items: center;
+}
+
+.change-account-dialog{
+    width: 100%;
+
+    max-width: 480px;
+
+    background: #FFFFFF;
+
+    border-radius: 24px;
+
+    padding: 40px;
+
+    box-shadow: 0 20px 50px rgba(0,0,0,0.30);
+
+    text-align: center;
+}
+
+.change-account-logo{
+    display: flex;
+
+    justify-content: center;
+
+    align-items: center;
+
+    gap: 12px;
+
+    margin-bottom: 25px;
+}
+
+.change-account-title{
+    color: #000000;
+
+    font-size: 30px;
+
+    font-weight: 700;
+
+    margin-bottom: 20px;
+}
+
+.change-account-label{
+    color: #666666;
+
+    margin-bottom: 10px;
+}
+
+.change-account-email{
+    display: block;
+
+    color: #000000;
+
+    font-size: 18px;
+
+    margin-bottom: 25px;
+}
+
+.change-account-description{
+    color: #666666;
+
+    line-height: 1.6;
+
+    margin-bottom: 30px;
+}
+
+.change-account-actions{
+    display: flex;
+
+    gap: 15px;
+}
+
+.cancel-button,
+.confirm-button{
+    flex: 1;
+
+    border-radius: 12px;
+
+    padding: 14px;
+
+    font-size: 15px;
+
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition: 0.3s;
+}
+
+.cancel-button{
+    background: #FFFFFF;
+
+    color: #000000;
+
+    border: 2px solid #DADCE0;
+}
+
+.cancel-button:hover{
+    border-color: #D4AF37;
+}
+
+.confirm-button{
+    background: #D4AF37;
+
+    color: #000000;
+
+    border: none;
+}
+
+.confirm-button:hover{
+    background: #F4D67A;
+}
+
+/* ==========================
+   RESPONSIVE FASE 2
+========================== */
+
+@media (max-width: 480px){
+
+    .onboarding-card,
+    .change-account-dialog{
+        padding: 35px 25px;
+    }
+
+    .onboarding-title,
+    .change-account-title{
+        font-size: 28px;
+    }
+
+    .change-account-actions{
+        flex-direction: column;
+    }
+}

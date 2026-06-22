@@ -35,7 +35,21 @@ const dom = {
     continueButton: document.getElementById("continue-zovrake"),
     heroSection: document.querySelector(".hero"),
     authScreen: document.querySelector(".auth-screen"),
-    googleButton: document.getElementById("google-login")
+    googleButton: document.getElementById("google-login"),
+    onboardingScreen: document.querySelector(".onboarding-screen"),
+    sessionEmail: document.getElementById("session-email"),
+
+
+    termsCheckbox: document.getElementById("terms-checkbox"),
+    createAccountButton: document.getElementById("create-account"),
+
+    changeEmailButton: document.getElementById("change-email"),
+
+    changeAccountModal: document.querySelector(".change-account-modal"),
+    changeAccountEmail: document.getElementById("change-account-email"),
+
+    cancelChangeButton: document.getElementById("cancel-change"),
+    confirmChangeButton: document.getElementById("confirm-change")
 };
 
 /**
@@ -77,7 +91,30 @@ function ocultarPantallaAuth() {
     // Cuando exista, aquí se debe mostrar esa sección, por ejemplo:
     // dom.dashboardSection.classList.add("active");
 }
+//funciones de Fase 2.
 
+function mostrarOnboarding(email) {
+    dom.authScreen.classList.remove("active");
+
+    dom.onboardingScreen.classList.add("active");
+
+    dom.sessionEmail.textContent = email;
+
+    dom.changeAccountEmail.textContent = email;
+}
+
+function mostrarModalCambioCuenta() {
+    dom.changeAccountModal.classList.add("active");
+}
+
+function ocultarModalCambioCuenta() {
+    dom.changeAccountModal.classList.remove("active");
+}
+
+function actualizarBotonCrearCuenta() {
+    dom.createAccountButton.disabled =
+        !dom.termsCheckbox.checked;
+}
 
 /* --------------------------------------------------------
    4. BOTÓN "CONTINUAR" (hero -> auth-screen)
@@ -131,7 +168,56 @@ if (domListo) {
     dom.googleButton.addEventListener("click", iniciarSesionConGoogle);
 }
 
+//Fase 2.
 
+if (domListo) {
+    actualizarBotonCrearCuenta();
+
+    dom.termsCheckbox.addEventListener(
+        "change",
+        actualizarBotonCrearCuenta
+    );
+
+    dom.changeEmailButton.addEventListener(
+        "click",
+        mostrarModalCambioCuenta
+    );
+
+    dom.cancelChangeButton.addEventListener(
+        "click",
+        ocultarModalCambioCuenta
+    );
+
+}
+
+async function cambiarCuenta() {
+
+    ocultarModalCambioCuenta();
+
+    try {
+
+        await supabaseClient.auth.signOut();
+
+        await iniciarSesionConGoogle();
+
+    } catch (error) {
+
+        console.error(
+            "[Zovrake] Error al cambiar cuenta:",
+            error
+        );
+
+    }
+}
+
+if (domListo) {
+
+    dom.confirmChangeButton.addEventListener(
+        "click",
+        cambiarCuenta
+    );
+
+}
 /* --------------------------------------------------------
    6. ESTADO DE AUTENTICACIÓN
    --------------------------------------------------------
@@ -148,13 +234,22 @@ supabaseClient.auth.onAuthStateChange((event, session) => {
 
     if (!domListo) return;
 
-    if (session) {
-    console.log("[Zovrake] Usuario autenticado:", session.user.email);
+if (session) {
 
     console.log(
-        "[Zovrake] Esperando la siguiente estructura."
+        "[Zovrake] Usuario autenticado:",
+        session.user.email
     );
+
+    mostrarOnboarding(
+        session.user.email
+    );
+
 } else {
-        console.log("[Zovrake] Sin sesión activa.");
-    }
+
+    console.log(
+        "[Zovrake] Sin sesión activa."
+    );
+}
+
 });

@@ -130,6 +130,207 @@
     </div>
 
 </section>
+
+<!-- FASE 2 - CREAR CUENTA -->
+
+<section class="onboarding-screen">
+
+    <div class="onboarding-card">
+
+        <!-- Encabezado -->
+        <div class="onboarding-logo">
+
+            <span class="logo-z">
+
+                Z
+
+            </span>
+
+            <span class="logo-text">
+
+                ZOVRAKE
+
+            </span>
+
+        </div>
+
+        <!-- Título -->
+        <h1 class="onboarding-title">
+
+            Vamos a crear tu cuenta
+
+        </h1>
+
+        <!-- Subtítulo -->
+        <p class="onboarding-description">
+
+            Completa estos pasos para continuar con tu experiencia en ZOVRAKE.
+
+        </p>
+
+        <!-- Términos -->
+        <label class="checkbox-item">
+
+            <input
+                type="checkbox"
+                id="terms-checkbox"
+            >
+
+            <span>
+
+                Acepto los Términos y Condiciones y la Política de Privacidad.
+
+            </span>
+
+        </label>
+
+        <!-- Novedades -->
+        <label class="checkbox-item">
+
+            <input
+                type="checkbox"
+                id="marketing-checkbox"
+                checked
+            >
+
+            <span>
+
+                Deseo recibir novedades, recomendaciones y actualizaciones de ZOVRAKE.
+
+            </span>
+
+        </label>
+
+        <!-- Nota -->
+        <p class="checkbox-note">
+
+            Podrás cambiar esta preferencia más adelante.
+
+        </p>
+
+        <!-- Botón principal -->
+        <button
+            class="create-account-button"
+            id="create-account"
+            disabled
+        >
+
+            Crear cuenta
+
+        </button>
+
+        <!-- Información de sesión -->
+        <div class="session-info">
+
+            <p>
+
+                Has iniciado sesión como:
+
+            </p>
+
+            <strong id="session-email">
+
+                usuario@gmail.com
+
+            </strong>
+
+        </div>
+
+        <!-- Cambiar correo -->
+        <button
+            class="change-email-button"
+            id="change-email"
+            type="button"
+        >
+
+            Usar otro correo electrónico
+
+        </button>
+
+    </div>
+
+</section>
+
+<!-- CONFIRMACIÓN CAMBIAR CUENTA -->
+
+<section class="change-account-modal">
+
+   <div class="change-account-dialog">
+        <!-- Encabezado -->
+        <div class="change-account-logo">
+
+            <span class="logo-z">
+
+                Z
+
+            </span>
+
+            <span class="logo-text">
+
+                ZOVRAKE
+
+            </span>
+
+        </div>
+
+        <!-- Título -->
+        <h1 class="change-account-title">
+
+            ¿Deseas cambiar de cuenta?
+
+        </h1>
+
+        <!-- Cuenta actual -->
+        <p class="change-account-label">
+
+            Cuenta actual:
+
+        </p>
+
+        <strong
+            class="change-account-email"
+            id="change-account-email"
+        >
+
+            usuario@gmail.com
+
+        </strong>
+
+        <!-- Descripción -->
+        <p class="change-account-description">
+
+            Podrás continuar con una cuenta diferente para completar tu registro en ZOVRAKE.
+
+        </p>
+
+        <!-- Acciones -->
+        <div class="change-account-actions">
+
+            <button
+                class="cancel-button"
+                id="cancel-change"
+                type="button"
+            >
+
+                Cancelar
+
+            </button>
+
+            <button
+                class="confirm-button"
+                id="confirm-change"
+                type="button"
+            >
+
+                Cambiar cuenta
+
+            </button>
+
+        </div>
+
+    </div>
+
+</section>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="script.js"></script>
 
