@@ -133,7 +133,11 @@ function mostrarPantallaCambioCuenta() {
 }
 
 function ocultarPantallaCambioCuenta() {
-    dom.changeAccountScreen.classList.remove("active");
+
+    ocultarTodasLasPantallas();
+
+    dom.onboardingScreen.classList.add("active");
+
 }
 
 function actualizarBotonCrearCuenta() {
