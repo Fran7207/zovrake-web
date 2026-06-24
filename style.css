@@ -21,6 +21,8 @@ body{
 ========================== */
 
 .hero{
+
+
     position: relative;
     width: 100%;
     min-height: 100vh;
@@ -667,17 +669,17 @@ body{
    CONFIRMACIÓN CAMBIAR CUENTA
 ========================== */
 
-.change-account-modal{
+.screen-change-account{
     display: none;
 
     min-height: 100vh;
 
-    background: rgba(0,0,0,0.80);
+   background: #0B0B0B;
 
     padding: 40px 20px;
 }
 
-.change-account-modal.active{
+.screen-change-account.active{
     display: flex;
 
     justify-content: center;

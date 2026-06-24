@@ -45,7 +45,7 @@ const dom = {
 
     changeEmailButton: document.getElementById("change-email"),
 
-    changeAccountModal: document.querySelector(".change-account-modal"),
+   changeAccountScreen: document.querySelector(".screen-change-account"),
     changeAccountEmail: document.getElementById("change-account-email"),
 
     cancelChangeButton: document.getElementById("cancel-change"),
@@ -74,14 +74,33 @@ function verificarElementosDOM(elementos) {
 
 const domListo = verificarElementosDOM(dom);
 
+/* ==========================================================
+   OCULTAR TODAS LAS PANTALLAS
+========================================================== */
+
+function ocultarTodasLasPantallas() {
+
+    dom.heroSection.style.display = "none";
+
+    dom.authScreen.classList.remove("active");
+
+    dom.onboardingScreen.classList.remove("active");
+
+    dom.changeAccountScreen.classList.remove("active");
+
+}
+
 
 /* --------------------------------------------------------
    3. CONTROL DE PANTALLAS (hero / auth-screen)
    -------------------------------------------------------- */
 
 function mostrarPantallaAuth() {
-    dom.heroSection.style.display = "none";
+
+    ocultarTodasLasPantallas();
+
     dom.authScreen.classList.add("active");
+
 }
 
 function ocultarPantallaAuth() {
@@ -95,25 +114,26 @@ function ocultarPantallaAuth() {
 
 function mostrarOnboarding(email) {
 
-    dom.heroSection.style.display = "none";
-
-    dom.authScreen.style.display = "none";
-
-    dom.authScreen.classList.remove("active");
+    ocultarTodasLasPantallas();
 
     dom.onboardingScreen.classList.add("active");
 
     dom.sessionEmail.textContent = email;
 
     dom.changeAccountEmail.textContent = email;
+
 }
 
-function mostrarModalCambioCuenta() {
-    dom.changeAccountModal.classList.add("active");
+function mostrarPantallaCambioCuenta() {
+
+    ocultarTodasLasPantallas();
+
+    dom.changeAccountScreen.classList.add("active");
+
 }
 
-function ocultarModalCambioCuenta() {
-    dom.changeAccountModal.classList.remove("active");
+function ocultarPantallaCambioCuenta() {
+    dom.changeAccountScreen.classList.remove("active");
 }
 
 function actualizarBotonCrearCuenta() {
@@ -185,19 +205,19 @@ if (domListo) {
 
     dom.changeEmailButton.addEventListener(
         "click",
-        mostrarModalCambioCuenta
+        mostrarPantallaCambioCuenta
     );
 
     dom.cancelChangeButton.addEventListener(
         "click",
-        ocultarModalCambioCuenta
+        ocultarPantallaCambioCuenta
     );
 
 }
 
 async function cambiarCuenta() {
 
-    ocultarModalCambioCuenta();
+    ocultarPantallaCambioCuenta();
 
     try {
 
