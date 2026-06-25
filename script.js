@@ -49,7 +49,11 @@ const dom = {
     changeAccountEmail: document.getElementById("change-account-email"),
 
     cancelChangeButton: document.getElementById("cancel-change"),
-    confirmChangeButton: document.getElementById("confirm-change")
+    confirmChangeButton: document.getElementById("confirm-change"),
+
+    profileSetupScreen: document.querySelector(".profile-setup-screen"),
+    profileNameInput: document.getElementById("profile-name"),
+    profileContinueButton: document.getElementById("profile-continue")
 };
 
 /**
@@ -87,6 +91,8 @@ function ocultarTodasLasPantallas() {
     dom.onboardingScreen.classList.remove("active");
 
     dom.changeAccountScreen.classList.remove("active");
+
+    dom.profileSetupScreen.classList.remove("active");
 
 }
 
@@ -143,6 +149,41 @@ function ocultarPantallaCambioCuenta() {
 function actualizarBotonCrearCuenta() {
     dom.createAccountButton.disabled =
         !dom.termsCheckbox.checked;
+}
+
+/* --------------------------------------------------------
+   PANTALLA 5 - CONFIGURACIÓN INICIAL DEL PERFIL (NOMBRE)
+   -------------------------------------------------------- */
+
+// Límites de longitud del nombre (en caracteres ya recortados).
+const NOMBRE_PERFIL_MIN = 2;
+const NOMBRE_PERFIL_MAX = 40;
+
+// Devuelve el nombre sin espacios al inicio ni al final.
+function obtenerNombrePerfil() {
+    return dom.profileNameInput.value.trim();
+}
+
+// Un nombre es válido si, una vez recortado, no está vacío
+// y respeta la longitud mínima y máxima permitidas.
+function nombrePerfilEsValido(nombre) {
+    return nombre.length >= NOMBRE_PERFIL_MIN &&
+        nombre.length <= NOMBRE_PERFIL_MAX;
+}
+
+// Habilita "Continuar" solo cuando hay un nombre válido.
+function actualizarBotonContinuarPerfil() {
+    dom.profileContinueButton.disabled =
+        !nombrePerfilEsValido(obtenerNombrePerfil());
+}
+
+function mostrarConfiguracionPerfil() {
+
+    ocultarTodasLasPantallas();
+
+    dom.profileSetupScreen.classList.add("active");
+
+    actualizarBotonContinuarPerfil();
 }
 
 /* --------------------------------------------------------
@@ -216,6 +257,29 @@ if (domListo) {
         "click",
         ocultarPantallaCambioCuenta
     );
+
+    // Pantalla 3 -> Pantalla 5: solo tras pulsar "Crear cuenta".
+    // La Pantalla 4 sigue siendo independiente ("Usar otro correo").
+    dom.createAccountButton.addEventListener(
+        "click",
+        mostrarConfiguracionPerfil
+    );
+
+    dom.profileNameInput.addEventListener(
+        "input",
+        actualizarBotonContinuarPerfil
+    );
+
+    // Normaliza el nombre (sin espacios sobrantes) al continuar.
+    dom.profileContinueButton.addEventListener("click", () => {
+        const nombre = obtenerNombrePerfil();
+
+        if (!nombrePerfilEsValido(nombre)) return;
+
+        dom.profileNameInput.value = nombre;
+
+        console.log("[Zovrake] Nombre de perfil confirmado:", nombre);
+    });
 
 }
 
