@@ -961,3 +961,342 @@ body{
         margin-bottom: 40px;
     }
 }
+
+/* ==========================
+   PANTALLA 2 - MENSAJE DE ERROR DEL CORREO
+========================== */
+
+.email-error{
+    display: none;
+
+    color: #D14343;
+
+    font-size: 14px;
+
+    text-align: left;
+
+    margin-top: -10px;
+
+    margin-bottom: 20px;
+}
+
+.email-error.visible{
+    display: block;
+}
+
+/* ==========================
+   PANTALLA 6 - CREAR CONTRASEÑA
+========================== */
+
+.password-setup-screen{
+    display: none;
+
+    min-height: 100vh;
+
+    background: #0B0B0B;
+
+    padding: 40px 20px;
+}
+
+.password-setup-screen.active{
+    display: flex;
+
+    justify-content: center;
+    align-items: center;
+}
+
+.password-setup-card{
+    width: 100%;
+    max-width: 480px;
+
+    background: #FFFFFF;
+
+    border-radius: 24px;
+
+    padding: 50px 40px;
+
+    box-shadow: 0 20px 50px rgba(0,0,0,0.30);
+
+    text-align: center;
+}
+
+.password-setup-brand{
+    color: #D4AF37;
+
+    font-size: 32px;
+    font-weight: 700;
+
+    letter-spacing: 6px;
+
+    margin-bottom: 30px;
+}
+
+.password-setup-title{
+    color: #000000;
+
+    font-size: 34px;
+    font-weight: 700;
+
+    line-height: 1.2;
+
+    margin-bottom: 15px;
+}
+
+.password-setup-description{
+    color: #666666;
+
+    font-size: 16px;
+
+    line-height: 1.6;
+
+    margin-bottom: 25px;
+}
+
+.password-setup-account{
+    background: #F7F7F7;
+
+    border-radius: 12px;
+
+    padding: 14px;
+
+    margin-bottom: 25px;
+}
+
+.password-setup-account-label{
+    color: #666666;
+
+    font-size: 14px;
+
+    margin-right: 6px;
+}
+
+.password-setup-account-email{
+    color: #000000;
+
+    font-size: 15px;
+
+    word-break: break-all;
+}
+
+.password-setup-input{
+    width: 100%;
+
+    border: 2px solid #DADCE0;
+
+    border-radius: 12px;
+
+    padding: 16px;
+
+    font-size: 16px;
+
+    margin-bottom: 15px;
+
+    outline: none;
+
+    transition: 0.3s;
+}
+
+.password-setup-input:focus{
+    border-color: #D4AF37;
+}
+
+/* Indicador de seguridad */
+.password-strength{
+    margin-bottom: 20px;
+}
+
+.password-strength-bar{
+    width: 100%;
+
+    height: 8px;
+
+    background: #E6E6E6;
+
+    border-radius: 6px;
+
+    overflow: hidden;
+}
+
+.password-strength-fill{
+    width: 0;
+
+    height: 100%;
+
+    border-radius: 6px;
+
+    transition: width 0.3s, background 0.3s;
+}
+
+.password-strength-fill.weak{
+    width: 25%;
+
+    background: #D14343;
+}
+
+.password-strength-fill.medium{
+    width: 50%;
+
+    background: #E0A100;
+}
+
+.password-strength-fill.strong{
+    width: 75%;
+
+    background: #8FB339;
+}
+
+.password-strength-fill.very-strong{
+    width: 100%;
+
+    background: #2E9E5B;
+}
+
+.password-strength-label{
+    display: block;
+
+    text-align: left;
+
+    font-size: 13px;
+    font-weight: 700;
+
+    color: #666666;
+
+    margin-top: 8px;
+
+    min-height: 16px;
+}
+
+/* Lista de requisitos */
+.password-requirements{
+    list-style: none;
+
+    text-align: left;
+
+    margin-bottom: 20px;
+}
+
+.password-requirement{
+    color: #999999;
+
+    font-size: 14px;
+
+    line-height: 1.8;
+
+    transition: color 0.3s;
+}
+
+.password-requirement::before{
+    content: "✕";
+
+    display: inline-block;
+
+    width: 20px;
+
+    color: #C0C0C0;
+
+    font-weight: 700;
+}
+
+.password-requirement.valid{
+    color: #2E9E5B;
+}
+
+.password-requirement.valid::before{
+    content: "✓";
+
+    color: #2E9E5B;
+}
+
+/* Mensaje de coincidencia de contraseñas */
+.password-match-message{
+    display: none;
+
+    text-align: left;
+
+    font-size: 14px;
+
+    margin-top: -5px;
+
+    margin-bottom: 15px;
+}
+
+.password-match-message.visible{
+    display: block;
+}
+
+.password-match-message.ok{
+    color: #2E9E5B;
+}
+
+.password-match-message.error{
+    color: #D14343;
+}
+
+/* Mensaje de error de registro */
+.password-setup-error{
+    display: none;
+
+    color: #D14343;
+
+    font-size: 14px;
+
+    text-align: left;
+
+    margin-bottom: 15px;
+}
+
+.password-setup-error.visible{
+    display: block;
+}
+
+.password-setup-button{
+    width: 100%;
+
+    background: #D4AF37;
+
+    color: #000000;
+
+    border: none;
+
+    border-radius: 12px;
+
+    padding: 16px;
+
+    font-size: 16px;
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition: 0.3s;
+}
+
+.password-setup-button:hover:not(:disabled){
+    background: #F4D67A;
+
+    transform: translateY(-2px);
+}
+
+.password-setup-button:disabled{
+    opacity: 0.5;
+
+    cursor: not-allowed;
+}
+
+/* ==========================
+   RESPONSIVE PANTALLA 6
+========================== */
+
+@media (max-width: 480px){
+
+    .password-setup-card{
+        padding: 35px 25px;
+    }
+
+    .password-setup-title{
+        font-size: 28px;
+    }
+
+    .password-setup-brand{
+        font-size: 26px;
+    }
+}

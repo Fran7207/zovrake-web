@@ -53,7 +53,26 @@ const dom = {
 
     profileSetupScreen: document.querySelector(".profile-setup-screen"),
     profileNameInput: document.getElementById("profile-name"),
-    profileContinueButton: document.getElementById("profile-continue")
+    profileContinueButton: document.getElementById("profile-continue"),
+
+    emailInput: document.getElementById("email-zovrake"),
+    emailContinueButton: document.getElementById("email-continue"),
+    emailError: document.getElementById("email-error"),
+
+    passwordScreen: document.querySelector(".password-setup-screen"),
+    passwordAccountEmail: document.getElementById("password-account-email"),
+    passwordCreateInput: document.getElementById("password-create"),
+    passwordConfirmInput: document.getElementById("password-confirm"),
+    passwordStrengthFill: document.getElementById("password-strength-fill"),
+    passwordStrengthLabel: document.getElementById("password-strength-label"),
+    passwordMatchMessage: document.getElementById("password-match-message"),
+    passwordSetupError: document.getElementById("password-setup-error"),
+    passwordContinueButton: document.getElementById("password-continue"),
+    reqLength: document.getElementById("req-length"),
+    reqUpper: document.getElementById("req-upper"),
+    reqLower: document.getElementById("req-lower"),
+    reqNumber: document.getElementById("req-number"),
+    reqSpecial: document.getElementById("req-special")
 };
 
 /**
@@ -93,6 +112,8 @@ function ocultarTodasLasPantallas() {
     dom.changeAccountScreen.classList.remove("active");
 
     dom.profileSetupScreen.classList.remove("active");
+
+    dom.passwordScreen.classList.remove("active");
 
 }
 
@@ -184,6 +205,287 @@ function mostrarConfiguracionPerfil() {
     dom.profileSetupScreen.classList.add("active");
 
     actualizarBotonContinuarPerfil();
+}
+
+/* --------------------------------------------------------
+   PANTALLA 2 - VALIDACIÓN DE CORREO
+   -------------------------------------------------------- */
+
+// Patrón sencillo y robusto: texto, @, texto, punto, texto,
+// sin espacios. Suficiente para validación de formato en front.
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Devuelve el correo sin espacios al inicio ni al final.
+function obtenerCorreo() {
+    return dom.emailInput.value.trim();
+}
+
+// Válido si no está vacío y cumple el formato de correo.
+function correoEsValido(correo) {
+    return correo.length > 0 && EMAIL_REGEX.test(correo);
+}
+
+function mostrarErrorCorreo() {
+    dom.emailError.textContent = "Introduce un correo electrónico válido.";
+    dom.emailError.classList.add("visible");
+}
+
+function ocultarErrorCorreo() {
+    dom.emailError.textContent = "";
+    dom.emailError.classList.remove("visible");
+}
+
+// Pantalla 2 -> Pantalla 6: solo si el correo tiene formato válido.
+function continuarConCorreo() {
+    const correo = obtenerCorreo();
+
+    if (!correoEsValido(correo)) {
+        mostrarErrorCorreo();
+        return;
+    }
+
+    ocultarErrorCorreo();
+    mostrarPantallaPassword(correo);
+}
+
+/* --------------------------------------------------------
+   PANTALLA 6 - CREAR CONTRASEÑA (Supabase Auth: email/password)
+   -------------------------------------------------------- */
+
+// Correo recibido desde la Pantalla 2; única fuente para el signUp.
+let correoEnRegistro = "";
+
+// Evita signUp duplicados mientras una petición está en curso.
+let registroEnProgreso = false;
+
+function mostrarPantallaPassword(correo) {
+
+    correoEnRegistro = correo;
+
+    ocultarTodasLasPantallas();
+
+    dom.passwordScreen.classList.add("active");
+
+    dom.passwordAccountEmail.textContent = correo;
+
+    reiniciarFormularioPassword();
+}
+
+// Deja el formulario en su estado inicial al entrar a la pantalla.
+function reiniciarFormularioPassword() {
+    dom.passwordCreateInput.value = "";
+    dom.passwordConfirmInput.value = "";
+
+    ocultarErrorRegistro();
+
+    dom.passwordMatchMessage.textContent = "";
+    dom.passwordMatchMessage.className = "password-match-message";
+
+    manejarEntradaPassword();
+}
+
+// Evalúa cada requisito de seguridad de forma independiente.
+function evaluarRequisitosPassword(password) {
+    return {
+        length: password.length >= 8,
+        upper: /[A-Z]/.test(password),
+        lower: /[a-z]/.test(password),
+        number: /[0-9]/.test(password),
+        special: /[^A-Za-z0-9]/.test(password)
+    };
+}
+
+function todosRequisitosCumplidos(requisitos) {
+    return Object.values(requisitos).every(Boolean);
+}
+
+// Refleja en la lista qué requisitos se cumplen en tiempo real.
+function actualizarRequisitosUI(requisitos) {
+    dom.reqLength.classList.toggle("valid", requisitos.length);
+    dom.reqUpper.classList.toggle("valid", requisitos.upper);
+    dom.reqLower.classList.toggle("valid", requisitos.lower);
+    dom.reqNumber.classList.toggle("valid", requisitos.number);
+    dom.reqSpecial.classList.toggle("valid", requisitos.special);
+}
+
+// Traduce el número de requisitos cumplidos a un nivel visual.
+function calcularNivelFortaleza(password, requisitos) {
+    if (password.length === 0) {
+        return { clase: "", texto: "" };
+    }
+
+    const cumplidos = Object.values(requisitos).filter(Boolean).length;
+
+    if (cumplidos <= 2) {
+        return { clase: "weak", texto: "Seguridad: Débil" };
+    }
+
+    if (cumplidos === 3) {
+        return { clase: "medium", texto: "Seguridad: Media" };
+    }
+
+    if (cumplidos === 4) {
+        return { clase: "strong", texto: "Seguridad: Fuerte" };
+    }
+
+    return { clase: "very-strong", texto: "Seguridad: Muy fuerte" };
+}
+
+function actualizarFortalezaUI(password, requisitos) {
+    const nivel = calcularNivelFortaleza(password, requisitos);
+
+    dom.passwordStrengthFill.className =
+        `password-strength-fill ${nivel.clase}`.trim();
+
+    dom.passwordStrengthLabel.textContent = nivel.texto;
+}
+
+// Verdadero solo si la confirmación coincide y no está vacía.
+function passwordsCoinciden() {
+    return dom.passwordConfirmInput.value.length > 0 &&
+        dom.passwordCreateInput.value === dom.passwordConfirmInput.value;
+}
+
+// Muestra el estado de coincidencia debajo del campo de confirmación.
+function actualizarMensajeConfirmacion() {
+    const confirmacion = dom.passwordConfirmInput.value;
+
+    if (confirmacion.length === 0) {
+        dom.passwordMatchMessage.className = "password-match-message";
+        dom.passwordMatchMessage.textContent = "";
+        return;
+    }
+
+    if (passwordsCoinciden()) {
+        dom.passwordMatchMessage.className =
+            "password-match-message visible ok";
+        dom.passwordMatchMessage.textContent = "Las contraseñas coinciden.";
+    } else {
+        dom.passwordMatchMessage.className =
+            "password-match-message visible error";
+        dom.passwordMatchMessage.textContent = "Las contraseñas no coinciden.";
+    }
+}
+
+// Habilita CONTINUAR solo con correo válido, requisitos cumplidos
+// y confirmación correcta.
+function actualizarBotonPassword(requisitos) {
+    const habilitar =
+        correoEsValido(correoEnRegistro) &&
+        todosRequisitosCumplidos(requisitos) &&
+        passwordsCoinciden();
+
+    dom.passwordContinueButton.disabled = !habilitar;
+}
+
+function mostrarErrorRegistro(mensaje) {
+    dom.passwordSetupError.textContent = mensaje;
+    dom.passwordSetupError.classList.add("visible");
+}
+
+function ocultarErrorRegistro() {
+    dom.passwordSetupError.textContent = "";
+    dom.passwordSetupError.classList.remove("visible");
+}
+
+// Punto único que recalcula toda la UI ante cualquier cambio.
+function manejarEntradaPassword() {
+    const password = dom.passwordCreateInput.value;
+    const requisitos = evaluarRequisitosPassword(password);
+
+    actualizarRequisitosUI(requisitos);
+    actualizarFortalezaUI(password, requisitos);
+    actualizarMensajeConfirmacion();
+    actualizarBotonPassword(requisitos);
+
+    // Cualquier edición limpia un error previo de Supabase.
+    ocultarErrorRegistro();
+}
+
+// Convierte errores de Supabase en mensajes claros para la interfaz.
+function traducirErrorRegistro(error) {
+    const mensaje = (error && error.message ? error.message : "").toLowerCase();
+
+    if (
+        mensaje.includes("already registered") ||
+        mensaje.includes("already been registered") ||
+        mensaje.includes("user already exists")
+    ) {
+        return "Este correo electrónico ya está registrado.";
+    }
+
+    if (mensaje.includes("email") && mensaje.includes("invalid")) {
+        return "El correo electrónico no es válido.";
+    }
+
+    if (mensaje.includes("password")) {
+        return "La contraseña no cumple los requisitos de seguridad.";
+    }
+
+    if (
+        mensaje.includes("network") ||
+        mensaje.includes("failed to fetch") ||
+        mensaje.includes("fetch")
+    ) {
+        return "Error de conexión. Comprueba tu red e inténtalo de nuevo.";
+    }
+
+    return "No se pudo crear la cuenta. Inténtalo de nuevo.";
+}
+
+// Crea el usuario en Supabase Auth y, si todo va bien, muestra la
+// Pantalla 3 manteniendo el flujo existente (3 -> 5).
+async function crearUsuarioConCorreo() {
+    if (registroEnProgreso) return;
+
+    const password = dom.passwordCreateInput.value;
+    const requisitos = evaluarRequisitosPassword(password);
+
+    const datosValidos =
+        correoEsValido(correoEnRegistro) &&
+        todosRequisitosCumplidos(requisitos) &&
+        passwordsCoinciden();
+
+    if (!datosValidos) return;
+
+    registroEnProgreso = true;
+    dom.passwordContinueButton.disabled = true;
+    ocultarErrorRegistro();
+
+    try {
+        const { error } = await supabaseClient.auth.signUp({
+            email: correoEnRegistro,
+            password: password,
+            options: {
+                emailRedirectTo: SUPABASE_CONFIG.redirectTo
+            }
+        });
+
+        if (error) {
+            throw error;
+        }
+
+        // El usuario quedó creado en Supabase Auth.
+        // onAuthStateChange mostrará el onboarding si se abre sesión;
+        // lo mostramos también aquí para el caso de confirmación por correo.
+        mostrarOnboarding(correoEnRegistro);
+
+    } catch (error) {
+        console.error("[Zovrake] Error al crear usuario:", error);
+        mostrarErrorRegistro(traducirErrorRegistro(error));
+
+    } finally {
+        registroEnProgreso = false;
+        actualizarBotonPassword(evaluarRequisitosPassword(dom.passwordCreateInput.value));
+    }
+}
+
+// Preparado para el futuro flujo "¿Olvidaste tu contraseña?" mediante
+// la recuperación oficial de Supabase. Aún sin interfaz asociada.
+function enviarRecuperacionPassword(correo) {
+    return supabaseClient.auth.resetPasswordForEmail(correo, {
+        redirectTo: SUPABASE_CONFIG.redirectTo
+    });
 }
 
 /* --------------------------------------------------------
@@ -280,6 +582,35 @@ if (domListo) {
 
         console.log("[Zovrake] Nombre de perfil confirmado:", nombre);
     });
+
+    // Pantalla 2: flujo por correo.
+    dom.emailContinueButton.addEventListener(
+        "click",
+        continuarConCorreo
+    );
+
+    // El mensaje de error desaparece en cuanto el correo es válido.
+    dom.emailInput.addEventListener("input", () => {
+        if (correoEsValido(obtenerCorreo())) {
+            ocultarErrorCorreo();
+        }
+    });
+
+    // Pantalla 6: validación en tiempo real.
+    dom.passwordCreateInput.addEventListener(
+        "input",
+        manejarEntradaPassword
+    );
+
+    dom.passwordConfirmInput.addEventListener(
+        "input",
+        manejarEntradaPassword
+    );
+
+    dom.passwordContinueButton.addEventListener(
+        "click",
+        crearUsuarioConCorreo
+    );
 
 }
 
