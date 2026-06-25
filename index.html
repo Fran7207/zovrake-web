@@ -439,13 +439,26 @@
         </div>
 
         <!-- Contraseña -->
-        <input
-            type="password"
-            class="password-setup-input"
-            id="password-create"
-            placeholder="Contraseña"
-            autocomplete="new-password"
-        >
+        <div class="password-input-wrapper">
+
+            <input
+                type="password"
+                class="password-setup-input"
+                id="password-create"
+                placeholder="Contraseña"
+                autocomplete="new-password"
+            >
+        
+            <button
+                type="button"
+                class="password-toggle"
+                id="toggle-password-create"
+                aria-label="Mostrar contraseña"
+            >
+                👁
+            </button>
+        
+        </div>
 
         <!-- Indicador de seguridad -->
         <div class="password-strength" id="password-strength">
@@ -496,13 +509,26 @@
         </ul>
 
         <!-- Confirmar contraseña -->
-        <input
-            type="password"
-            class="password-setup-input"
-            id="password-confirm"
-            placeholder="Confirmar contraseña"
-            autocomplete="new-password"
-        >
+        <div class="password-input-wrapper">
+
+            <input
+                type="password"
+                class="password-setup-input"
+                id="password-confirm"
+                placeholder="Confirmar contraseña"
+                autocomplete="new-password"
+            >
+        
+            <button
+                type="button"
+                class="password-toggle"
+                id="toggle-password-confirm"
+                aria-label="Mostrar contraseña"
+            >
+                👁
+            </button>
+        
+        </div>
 
         <!-- Mensaje de coincidencia (oculto por defecto) -->
         <p class="password-match-message" id="password-match-message"></p>

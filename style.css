@@ -1100,6 +1100,63 @@ body{
     border-color: #D4AF37;
 }
 
+/* ==========================
+   BOTÓN MOSTRAR CONTRASEÑA
+========================== */
+
+.password-input-wrapper{
+
+    position: relative;
+
+    width: 100%;
+
+    margin-bottom: 15px;
+
+}
+
+.password-input-wrapper .password-setup-input{
+
+    margin-bottom: 0;
+
+    padding-right: 55px;
+
+}
+
+.password-toggle{
+
+    position: absolute;
+
+    top: 50%;
+
+    right: 18px;
+
+    transform: translateY(-50%);
+
+    background: transparent;
+
+    border: none;
+
+    cursor: pointer;
+
+    color: #777777;
+
+    font-size: 18px;
+
+    transition: .25s;
+
+}
+
+.password-toggle:hover{
+
+    color: #D4AF37;
+
+}
+
+.password-toggle:focus{
+
+    outline: none;
+
+}
 /* Indicador de seguridad */
 .password-strength{
     margin-bottom: 20px;

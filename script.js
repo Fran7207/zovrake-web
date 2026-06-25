@@ -63,6 +63,13 @@ const dom = {
     passwordAccountEmail: document.getElementById("password-account-email"),
     passwordCreateInput: document.getElementById("password-create"),
     passwordConfirmInput: document.getElementById("password-confirm"),
+
+    togglePasswordCreate:
+document.getElementById("toggle-password-create"),
+
+togglePasswordConfirm:
+document.getElementById("toggle-password-confirm"),
+
     passwordStrengthFill: document.getElementById("password-strength-fill"),
     passwordStrengthLabel: document.getElementById("password-strength-label"),
     passwordMatchMessage: document.getElementById("password-match-message"),
@@ -487,6 +494,22 @@ function enviarRecuperacionPassword(correo) {
         redirectTo: SUPABASE_CONFIG.redirectTo
     });
 }
+/* --------------------------------------------------------
+   MOSTRAR / OCULTAR CONTRASEÑA
+-------------------------------------------------------- */
+
+function alternarVisibilidadPassword(input) {
+
+    input.type =
+        input.type === "password"
+            ? "text"
+            : "password";
+
+}
+
+
+
+
 
 /* --------------------------------------------------------
    4. BOTÓN "CONTINUAR" (hero -> auth-screen)
@@ -610,6 +633,19 @@ if (domListo) {
     dom.passwordContinueButton.addEventListener(
         "click",
         crearUsuarioConCorreo
+    );
+    dom.togglePasswordCreate.addEventListener(
+        "click",
+        () => alternarVisibilidadPassword(
+            dom.passwordCreateInput
+        )
+    );
+    
+    dom.togglePasswordConfirm.addEventListener(
+        "click",
+        () => alternarVisibilidadPassword(
+            dom.passwordConfirmInput
+        )
     );
 
 }
