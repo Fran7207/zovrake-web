@@ -551,6 +551,237 @@
     </div>
 
 </section>
+
+<!-- PANTALLA 7 - DASHBOARD PRINCIPAL -->
+
+<section class="dashboard-screen">
+
+    <!-- Menú lateral fijo -->
+    <aside class="dashboard-sidebar" id="dashboard-sidebar">
+
+        <div class="dashboard-brand">
+
+            ZOVRAKE
+
+        </div>
+
+        <p class="dashboard-tagline">
+
+            Centro de Inteligencia Empresarial
+
+        </p>
+
+        <hr class="dashboard-divider">
+
+        <nav class="dashboard-nav">
+
+            <button class="dashboard-nav-item active" type="button" data-view="inicio" data-label="Inicio">
+
+                <span class="dashboard-nav-icon">🏠</span> Inicio
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Tesorería">
+
+                <span class="dashboard-nav-icon">💰</span> Tesorería
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Compras">
+
+                <span class="dashboard-nav-icon">🛒</span> Compras
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Contabilidad">
+
+                <span class="dashboard-nav-icon">📊</span> Contabilidad
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Recursos Humanos">
+
+                <span class="dashboard-nav-icon">👥</span> Recursos Humanos
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Maquinaria">
+
+                <span class="dashboard-nav-icon">🚜</span> Maquinaria
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Gerencia Administrativa">
+
+                <span class="dashboard-nav-icon">🏢</span> Gerencia Administrativa
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Centro de Ayuda">
+
+                <span class="dashboard-nav-icon">❓</span> Centro de Ayuda
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Notificaciones">
+
+                <span class="dashboard-nav-icon">🔔</span> Notificaciones
+
+            </button>
+
+        </nav>
+
+        <hr class="dashboard-divider">
+
+        <div class="dashboard-user">
+
+            <button class="dashboard-nav-item" type="button" data-view="perfil" data-label="Perfil">
+
+                <span class="dashboard-nav-icon">👤</span> <span id="dashboard-user-name">Usuario</span>
+
+            </button>
+
+            <button class="dashboard-nav-item" type="button" data-view="configuracion" data-label="Configuración">
+
+                <span class="dashboard-nav-icon">⚙</span> Configuración
+
+            </button>
+
+            <button class="dashboard-nav-item dashboard-logout" type="button" data-view="logout" id="dashboard-logout">
+
+                <span class="dashboard-nav-icon">🚪</span> Cerrar sesión
+
+            </button>
+
+        </div>
+
+    </aside>
+
+    <!-- Área principal -->
+    <main class="dashboard-main">
+
+        <!-- Botón para abrir el menú en móvil -->
+        <button class="dashboard-menu-toggle" id="dashboard-menu-toggle" type="button" aria-label="Abrir menú">
+
+            ☰
+
+        </button>
+
+        <!-- Bienvenida (solo primer ingreso) -->
+        <div class="dashboard-welcome" id="dashboard-welcome">
+
+            <h1 class="dashboard-welcome-title">
+
+                ¡Bienvenido(a), <span id="welcome-user-name">Nombre</span>!
+
+            </h1>
+
+            <p class="dashboard-welcome-text">
+
+                Nos alegra darte la bienvenida a ZOVRAKE.
+
+            </p>
+
+        </div>
+
+        <!-- Contenido dinámico -->
+        <div class="dashboard-content">
+
+            <!-- Vista: Inicio -->
+            <div class="dashboard-view active" id="view-inicio">
+
+                <h2 class="dashboard-view-title">Inicio</h2>
+
+                <p class="dashboard-view-text">
+
+                    Este es tu punto de entrada a ZOVRAKE. Desde aquí podrás acceder
+                    a los módulos empresariales a medida que se vayan habilitando.
+
+                </p>
+
+            </div>
+
+            <!-- Vista: Perfil -->
+            <div class="dashboard-view" id="view-perfil">
+
+                <h2 class="dashboard-view-title">Perfil</h2>
+
+                <div class="dashboard-profile-field">
+
+                    <span class="dashboard-profile-label">Nombre</span>
+
+                    <strong class="dashboard-profile-value" id="profile-view-name">Nombre</strong>
+
+                </div>
+
+                <div class="dashboard-profile-field">
+
+                    <span class="dashboard-profile-label">Correo electrónico</span>
+
+                    <strong class="dashboard-profile-value" id="profile-view-email">correo@ejemplo.com</strong>
+
+                </div>
+
+            </div>
+
+            <!-- Vista: Configuración -->
+            <div class="dashboard-view" id="view-configuracion">
+
+                <h2 class="dashboard-view-title">Configuración</h2>
+
+                <p class="dashboard-view-text">
+
+                    Las opciones de configuración estarán disponibles próximamente.
+
+                </p>
+
+            </div>
+
+            <!-- Vista: Módulo genérico (placeholder) -->
+            <div class="dashboard-view" id="view-modulo">
+
+                <h2 class="dashboard-view-title" id="modulo-titulo">Módulo</h2>
+
+                <p class="dashboard-view-text">
+
+                    Este módulo estará disponible próximamente.
+
+                </p>
+
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- Confirmación de cierre de sesión -->
+    <div class="logout-overlay" id="logout-dialog">
+
+        <div class="logout-dialog">
+
+            <h2 class="logout-title">¿Deseas cerrar sesión?</h2>
+
+            <div class="logout-actions">
+
+                <button class="logout-cancel" id="logout-cancel" type="button">
+
+                    Cancelar
+
+                </button>
+
+                <button class="logout-confirm" id="logout-confirm" type="button">
+
+                    Cerrar sesión
+
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="script.js"></script>
 

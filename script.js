@@ -79,7 +79,20 @@ document.getElementById("toggle-password-confirm"),
     reqUpper: document.getElementById("req-upper"),
     reqLower: document.getElementById("req-lower"),
     reqNumber: document.getElementById("req-number"),
-    reqSpecial: document.getElementById("req-special")
+    reqSpecial: document.getElementById("req-special"),
+
+    dashboardScreen: document.querySelector(".dashboard-screen"),
+    dashboardSidebar: document.getElementById("dashboard-sidebar"),
+    dashboardMenuToggle: document.getElementById("dashboard-menu-toggle"),
+    dashboardUserName: document.getElementById("dashboard-user-name"),
+    dashboardWelcome: document.getElementById("dashboard-welcome"),
+    welcomeUserName: document.getElementById("welcome-user-name"),
+    profileViewName: document.getElementById("profile-view-name"),
+    profileViewEmail: document.getElementById("profile-view-email"),
+    moduloTitulo: document.getElementById("modulo-titulo"),
+    logoutDialog: document.getElementById("logout-dialog"),
+    logoutCancel: document.getElementById("logout-cancel"),
+    logoutConfirm: document.getElementById("logout-confirm")
 };
 
 /**
@@ -121,6 +134,8 @@ function ocultarTodasLasPantallas() {
     dom.profileSetupScreen.classList.remove("active");
 
     dom.passwordScreen.classList.remove("active");
+
+    dom.dashboardScreen.classList.remove("active");
 
 }
 
@@ -507,6 +522,152 @@ function alternarVisibilidadPassword(input) {
 
 }
 
+/* --------------------------------------------------------
+   PANTALLA 7 - DASHBOARD PRINCIPAL
+   --------------------------------------------------------
+   Persistencia local (no toca Supabase ni la sesión):
+   - el nombre elegido en la Pantalla 5 se guarda para reutilizarlo
+     en accesos posteriores y abrir el Dashboard directamente;
+   - un indicador recuerda si la bienvenida ya se mostró.
+   Cerrar sesión nunca borra estos datos.
+   -------------------------------------------------------- */
+
+const STORAGE_NOMBRE = "zovrake_nombre";
+const STORAGE_BIENVENIDA = "zovrake_bienvenida_mostrada";
+
+function guardarNombreUsuario(nombre) {
+    try {
+        localStorage.setItem(STORAGE_NOMBRE, nombre);
+    } catch (error) {
+        console.warn("[Zovrake] No se pudo guardar el nombre localmente.", error);
+    }
+}
+
+function obtenerNombreGuardado() {
+    try {
+        return localStorage.getItem(STORAGE_NOMBRE) || "";
+    } catch (error) {
+        return "";
+    }
+}
+
+function bienvenidaYaMostrada() {
+    try {
+        return localStorage.getItem(STORAGE_BIENVENIDA) === "true";
+    } catch (error) {
+        return false;
+    }
+}
+
+function marcarBienvenidaMostrada() {
+    try {
+        localStorage.setItem(STORAGE_BIENVENIDA, "true");
+    } catch (error) {
+        // El Dashboard sigue funcionando aunque no se pueda persistir.
+    }
+}
+
+// Cambia la vista activa del área principal. Para los módulos aún
+// no implementados se reutiliza una única vista genérica.
+function mostrarVistaDashboard(vista, etiqueta) {
+
+    document.querySelectorAll(".dashboard-view").forEach((seccion) => {
+        seccion.classList.remove("active");
+    });
+
+    if (vista === "perfil") {
+        document.getElementById("view-perfil").classList.add("active");
+    } else if (vista === "configuracion") {
+        document.getElementById("view-configuracion").classList.add("active");
+    } else if (vista === "modulo") {
+        dom.moduloTitulo.textContent = etiqueta || "Módulo";
+        document.getElementById("view-modulo").classList.add("active");
+    } else {
+        document.getElementById("view-inicio").classList.add("active");
+    }
+}
+
+// Resalta el ítem del menú seleccionado (los módulos y el perfil;
+// "Cerrar sesión" no se marca porque solo abre la confirmación).
+function marcarItemActivo(itemActivo) {
+
+    document.querySelectorAll(".dashboard-nav-item").forEach((item) => {
+        item.classList.remove("active");
+    });
+
+    if (itemActivo) {
+        itemActivo.classList.add("active");
+    }
+}
+
+function mostrarDashboard(nombre, correo) {
+
+    ocultarTodasLasPantallas();
+
+    dom.dashboardScreen.classList.add("active");
+
+    dom.dashboardUserName.textContent = nombre;
+    dom.profileViewName.textContent = nombre;
+    dom.profileViewEmail.textContent = correo;
+    dom.welcomeUserName.textContent = nombre;
+
+    // La bienvenida solo aparece en el primer ingreso.
+    if (bienvenidaYaMostrada()) {
+        dom.dashboardWelcome.classList.remove("visible");
+    } else {
+        dom.dashboardWelcome.classList.add("visible");
+        marcarBienvenidaMostrada();
+    }
+
+    mostrarVistaDashboard("inicio");
+}
+
+function abrirDialogoCerrarSesion() {
+    dom.logoutDialog.classList.add("visible");
+}
+
+function cerrarDialogoCerrarSesion() {
+    dom.logoutDialog.classList.remove("visible");
+}
+
+// Cierra la sesión en Supabase y vuelve a la pantalla inicial.
+// No elimina el nombre ni ningún dato local del usuario.
+async function confirmarCerrarSesion() {
+
+    cerrarDialogoCerrarSesion();
+
+    try {
+        await supabaseClient.auth.signOut();
+    } catch (error) {
+        console.error("[Zovrake] Error al cerrar sesión:", error);
+    }
+
+    ocultarTodasLasPantallas();
+    dom.heroSection.style.display = "block";
+}
+
+// Maneja los clics del menú lateral mediante delegación de eventos.
+function manejarNavegacionDashboard(evento) {
+
+    const item = evento.target.closest(".dashboard-nav-item");
+
+    if (!item) return;
+
+    const vista = item.dataset.view;
+
+    if (vista === "logout") {
+        abrirDialogoCerrarSesion();
+        return;
+    }
+
+    marcarItemActivo(item);
+
+    mostrarVistaDashboard(vista, item.dataset.label);
+
+    // En móvil, cerrar el menú tras seleccionar una opción.
+    dom.dashboardSidebar.classList.remove("open");
+}
+
 
 
 
@@ -604,6 +765,13 @@ if (domListo) {
         dom.profileNameInput.value = nombre;
 
         console.log("[Zovrake] Nombre de perfil confirmado:", nombre);
+
+        // Pantalla 5 -> Pantalla 7: guarda el nombre y abre el Dashboard.
+        guardarNombreUsuario(nombre);
+
+        const correo = dom.sessionEmail.textContent.trim();
+
+        mostrarDashboard(nombre, correo);
     });
 
     // Pantalla 2: flujo por correo.
@@ -646,6 +814,28 @@ if (domListo) {
         () => alternarVisibilidadPassword(
             dom.passwordConfirmInput
         )
+    );
+
+    // Pantalla 7: navegación del menú lateral (delegación).
+    dom.dashboardSidebar.addEventListener(
+        "click",
+        manejarNavegacionDashboard
+    );
+
+    // Menú lateral en móvil.
+    dom.dashboardMenuToggle.addEventListener("click", () => {
+        dom.dashboardSidebar.classList.toggle("open");
+    });
+
+    // Confirmación de cierre de sesión.
+    dom.logoutCancel.addEventListener(
+        "click",
+        cerrarDialogoCerrarSesion
+    );
+
+    dom.logoutConfirm.addEventListener(
+        "click",
+        confirmarCerrarSesion
     );
 
 }
@@ -701,9 +891,16 @@ if (session) {
         session.user.email
     );
 
-    mostrarOnboarding(
-        session.user.email
-    );
+    // Si ya existe un nombre guardado, el usuario completó antes la
+    // configuración inicial: se abre el Dashboard directamente.
+    // Si no, se mantiene el flujo de onboarding existente.
+    const nombreGuardado = obtenerNombreGuardado();
+
+    if (nombreGuardado) {
+        mostrarDashboard(nombreGuardado, session.user.email);
+    } else {
+        mostrarOnboarding(session.user.email);
+    }
 
 } else {
 
