@@ -591,6 +591,14 @@
 
             </button>
 
+            <button class="dashboard-nav-item" type="button" data-view="requerimientos" data-label="Requerimientos">
+
+                <span class="dashboard-nav-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="15.5" rx="2"/><rect x="9" y="3.2" width="6" height="3.4" rx="1"/><path d="M8.5 11h7M8.5 14.5h7M8.5 18h4.5"/></svg>
+                </span> Requerimientos
+
+            </button>
+
             <button class="dashboard-nav-item" type="button" data-view="modulo" data-label="Tesorería">
 
                 <span class="dashboard-nav-icon">
@@ -779,6 +787,39 @@
                     Este módulo estará disponible próximamente.
 
                 </p>
+
+            </div>
+
+            <!-- Vista: Requerimientos (estructura base del módulo) -->
+            <div class="dashboard-view" id="view-requerimientos">
+
+                <h2 class="dashboard-view-title">REQUERIMIENTOS</h2>
+
+                <!-- Navegación interna horizontal del módulo -->
+                <nav class="req-tabs zv-no-scrollbar" id="req-tabs">
+
+                    <button class="req-tab active" type="button" data-req-tab="panel-control">Panel de Control</button>
+
+                    <button class="req-tab" type="button" data-req-tab="bandeja-trabajo">Bandeja de Trabajo</button>
+
+                    <button class="req-tab" type="button" data-req-tab="nuevo-requerimiento">Nuevo Requerimiento</button>
+
+                    <button class="req-tab" type="button" data-req-tab="seguimiento">Seguimiento</button>
+
+                    <button class="req-tab" type="button" data-req-tab="documentos">Documentos</button>
+
+                    <button class="req-tab" type="button" data-req-tab="archivo">Archivo</button>
+
+                    <button class="req-tab" type="button" data-req-tab="notificaciones">Notificaciones</button>
+
+                    <button class="req-tab" type="button" data-req-tab="historial">Historial</button>
+
+                    <button class="req-tab" type="button" data-req-tab="configuracion">Configuración</button>
+
+                </nav>
+
+                <!-- Contenedor de trabajo (se cargará en fases posteriores) -->
+                <div class="req-workspace zv-no-scrollbar" id="req-workspace"></div>
 
             </div>
 

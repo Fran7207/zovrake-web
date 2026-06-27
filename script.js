@@ -579,6 +579,8 @@ function mostrarVistaDashboard(vista, etiqueta) {
         document.getElementById("view-perfil").classList.add("active");
     } else if (vista === "configuracion") {
         document.getElementById("view-configuracion").classList.add("active");
+    } else if (vista === "requerimientos") {
+        document.getElementById("view-requerimientos").classList.add("active");
     } else if (vista === "modulo") {
         dom.moduloTitulo.textContent = etiqueta || "Módulo";
         document.getElementById("view-modulo").classList.add("active");
@@ -666,6 +668,28 @@ function manejarNavegacionDashboard(evento) {
 
     // En móvil, cerrar el menú tras seleccionar una opción.
     dom.dashboardSidebar.classList.remove("open");
+}
+
+/* --------------------------------------------------------
+   MÓDULO REQUERIMIENTOS - NAVEGACIÓN INTERNA
+   --------------------------------------------------------
+   Solo gestiona el estado activo de la navegación horizontal.
+   El contenedor #req-workspace queda preparado para cargar
+   cada submódulo (Panel de Control, Bandeja de Trabajo, etc.)
+   en fases posteriores, usando tab.dataset.reqTab como clave.
+   -------------------------------------------------------- */
+
+function manejarTabsRequerimientos(evento) {
+
+    const tab = evento.target.closest(".req-tab");
+
+    if (!tab) return;
+
+    document.querySelectorAll(".req-tab").forEach((t) => {
+        t.classList.remove("active");
+    });
+
+    tab.classList.add("active");
 }
 
 
@@ -837,6 +861,17 @@ if (domListo) {
         "click",
         confirmarCerrarSesion
     );
+
+    // Módulo Requerimientos: navegación interna (delegación).
+    // Consulta directa para no afectar la verificación global del DOM.
+    const requerimientosTabs = document.getElementById("req-tabs");
+
+    if (requerimientosTabs) {
+        requerimientosTabs.addEventListener(
+            "click",
+            manejarTabsRequerimientos
+        );
+    }
 
 }
 
