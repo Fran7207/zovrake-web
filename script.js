@@ -622,6 +622,10 @@ function mostrarDashboard(nombre, correo) {
     }
 
     mostrarVistaDashboard("inicio");
+
+    // Restaura/establece la ruta correcta (recarga, atrás/adelante o
+    // primer ingreso) usando el Router, sin romper el flujo existente.
+    Router.sincronizar();
 }
 
 function abrirDialogoCerrarSesion() {
@@ -662,9 +666,17 @@ function manejarNavegacionDashboard(evento) {
         return;
     }
 
-    marcarItemActivo(item);
+    // La navegación (URL + animación + vista + estado activo) se
+    // centraliza en el Router para mantener una única fuente de verdad.
+    const ruta = item.dataset.route;
 
-    mostrarVistaDashboard(vista, item.dataset.label);
+    if (ruta) {
+        Router.navegar(ruta);
+    } else {
+        // Respaldo: comportamiento original si el ítem no tiene ruta.
+        marcarItemActivo(item);
+        mostrarVistaDashboard(vista, item.dataset.label);
+    }
 
     // En móvil, cerrar el menú tras seleccionar una opción.
     dom.dashboardSidebar.classList.remove("open");
@@ -690,6 +702,247 @@ function manejarTabsRequerimientos(evento) {
     });
 
     tab.classList.add("active");
+}
+
+/* ==========================================================
+   NAVEGACIÓN PROFESIONAL ZOVRAKE
+   ----------------------------------------------------------
+   Arquitectura modular (cada pieza, una sola responsabilidad):
+
+   • Animaciones            -> transición de entrada/salida de módulos.
+   • Router                 -> URL (hash), historial, atrás/adelante,
+                               restauración al recargar y sincronización
+                               del menú lateral.
+   • Gestor de Navegación   -> manejarNavegacionDashboard (existente).
+   • Gestor de Módulos      -> mostrarVistaDashboard (existente).
+
+   Se REUTILIZA toda la lógica existente; aquí solo se coordina.
+   Solo afecta la navegación de escritorio; en móvil el menú actual
+   sigue funcionando exactamente igual.
+   ========================================================== */
+
+/* --------------------------------------------------------
+   GESTOR DE ANIMACIONES
+   -------------------------------------------------------- */
+
+const Animaciones = {
+
+    DURACION: 220, // ms — debe coincidir con la transición CSS.
+
+    _temporizador: null,
+
+    // Desvanece el contenedor, intercambia el módulo y lo muestra
+    // de nuevo con una transición suave (sin parpadeos).
+    transicionarContenido(contenedor, intercambiar) {
+
+        if (!contenedor) {
+            intercambiar();
+            return;
+        }
+
+        clearTimeout(this._temporizador);
+
+        contenedor.classList.add("zv-leaving");
+
+        this._temporizador = setTimeout(() => {
+            intercambiar();
+            contenedor.classList.remove("zv-leaving");
+        }, this.DURACION);
+    }
+};
+
+/* --------------------------------------------------------
+   ROUTER INTERNO (HTML/CSS/JS puro, sin frameworks)
+   --------------------------------------------------------
+   Usa el hash de la URL (#/ruta). Así funciona en cualquier
+   hosting estático y conserva atrás/adelante y la recarga,
+   sin necesidad de configuración del servidor.
+   -------------------------------------------------------- */
+
+const Router = (function () {
+
+    // Tabla de rutas: ruta -> vista del sistema de vistas existente.
+    const RUTAS = {
+        "/inicio":          { vista: "inicio" },
+        "/dashboard":       { vista: "modulo", etiqueta: "Dashboard" },
+        "/requerimientos":  { vista: "requerimientos" },
+        "/logistica":       { vista: "modulo", etiqueta: "Logística" },
+        "/almacen":         { vista: "modulo", etiqueta: "Almacén / Kardex" },
+        "/tesoreria":       { vista: "modulo", etiqueta: "Tesorería" },
+        "/contabilidad":    { vista: "modulo", etiqueta: "Contabilidad" },
+        "/rrhh":            { vista: "modulo", etiqueta: "Recursos Humanos" },
+        "/maquinaria":      { vista: "modulo", etiqueta: "Maquinaria" },
+        "/gerencia":        { vista: "modulo", etiqueta: "Gerencia Administrativa" },
+        "/ayuda":           { vista: "modulo", etiqueta: "Centro de Ayuda" },
+        "/notificaciones":  { vista: "modulo", etiqueta: "Notificaciones" },
+        "/perfil":          { vista: "perfil" },
+        "/configuracion":   { vista: "configuracion" }
+    };
+
+    const RUTA_DEFECTO = "/inicio";
+
+    function dashboardActivo() {
+        return dom.dashboardScreen.classList.contains("active");
+    }
+
+    // Normaliza el hash actual a una ruta válida conocida.
+    function rutaActual() {
+        let ruta = location.hash.replace(/^#/, "");
+        if (ruta && ruta[0] !== "/") ruta = "/" + ruta;
+        return RUTAS[ruta] ? ruta : RUTA_DEFECTO;
+    }
+
+    // Aplica la ruta: (anima), cambia la vista y sincroniza el menú.
+    function aplicar(animar) {
+
+        const ruta = rutaActual();
+        const config = RUTAS[ruta];
+
+        const navItem = document.querySelector(
+            `.dashboard-nav-item[data-route="${ruta}"]`
+        );
+
+        const contenedor = document.querySelector(".dashboard-content");
+
+        // Reutiliza la lógica existente: estado activo + cambio de vista.
+        const intercambiar = () => {
+            if (navItem) marcarItemActivo(navItem);
+            mostrarVistaDashboard(config.vista, config.etiqueta);
+        };
+
+        if (animar) {
+            Animaciones.transicionarContenido(contenedor, intercambiar);
+        } else {
+            intercambiar();
+        }
+    }
+
+    // Navega a una ruta (desde el menú). Cambiar el hash dispara
+    // 'hashchange', que centraliza el render (única fuente de verdad).
+    function navegar(ruta) {
+        if (!RUTAS[ruta]) return;
+
+        const destino = "#" + ruta;
+
+        if (location.hash === destino) {
+            aplicar(true); // misma ruta: re-aplica sin duplicar historial.
+        } else {
+            location.hash = destino; // dispara hashchange -> aplicar().
+        }
+    }
+
+    // Restaura/establece la vista correcta al abrir el Dashboard.
+    function sincronizar() {
+        if (!location.hash.replace(/^#/, "")) {
+            // replaceState evita añadir una entrada extra al historial;
+            // si el entorno lo restringe (p. ej. file://), se usa el hash.
+            try {
+                history.replaceState(null, "", "#" + RUTA_DEFECTO);
+            } catch (error) {
+                location.hash = RUTA_DEFECTO;
+            }
+        }
+        aplicar(false); // entrada instantánea (ya hubo animación de pantalla).
+    }
+
+    // Arranque: escucha atrás/adelante y cambios de hash.
+    function iniciar() {
+        window.addEventListener("hashchange", () => {
+            if (dashboardActivo()) aplicar(true);
+        });
+    }
+
+    return { navegar, sincronizar, iniciar };
+})();
+
+/* --------------------------------------------------------
+   PREPARACIÓN DEL MENÚ LATERAL (rutas + colapso)
+   --------------------------------------------------------
+   Se realiza por código para no duplicar marcado en el HTML:
+   - asigna data-route a cada ítem según su data-label;
+   - envuelve el texto en .dashboard-nav-text (animación de colapso);
+   - divide la marca en versión compacta ("Z") y completa.
+   -------------------------------------------------------- */
+
+const RUTA_POR_ETIQUETA = {
+    "Inicio": "/inicio",
+    "Dashboard": "/dashboard",
+    "Requerimientos": "/requerimientos",
+    "Logística": "/logistica",
+    "Almacén / Kardex": "/almacen",
+    "Tesorería": "/tesoreria",
+    "Contabilidad": "/contabilidad",
+    "Recursos Humanos": "/rrhh",
+    "Maquinaria": "/maquinaria",
+    "Gerencia Administrativa": "/gerencia",
+    "Centro de Ayuda": "/ayuda",
+    "Notificaciones": "/notificaciones",
+    "Perfil": "/perfil",
+    "Configuración": "/configuracion"
+};
+
+function envolverEtiquetaItem(item) {
+
+    // El perfil ya usa <span id="dashboard-user-name"> como etiqueta.
+    const spanUsuario = item.querySelector("#dashboard-user-name");
+    if (spanUsuario) {
+        spanUsuario.classList.add("dashboard-nav-text");
+        return;
+    }
+
+    // Envuelve el primer nodo de texto con contenido real.
+    for (const nodo of Array.from(item.childNodes)) {
+        if (nodo.nodeType === Node.TEXT_NODE && nodo.textContent.trim()) {
+            const span = document.createElement("span");
+            span.className = "dashboard-nav-text";
+            span.textContent = nodo.textContent.trim();
+            item.replaceChild(span, nodo);
+            return;
+        }
+    }
+}
+
+function prepararItemsNavegacion() {
+
+    document.querySelectorAll(".dashboard-nav-item").forEach((item) => {
+
+        const ruta = RUTA_POR_ETIQUETA[item.dataset.label];
+
+        if (ruta) {
+            item.dataset.route = ruta;
+        }
+
+        envolverEtiquetaItem(item);
+    });
+}
+
+function prepararMarca() {
+
+    const marca = document.querySelector(".dashboard-brand");
+    if (!marca || marca.dataset.preparada) return;
+
+    const texto = marca.textContent.trim() || "ZOVRAKE";
+
+    const mini = document.createElement("span");
+    mini.className = "dashboard-brand-mini";
+    mini.textContent = texto.charAt(0);
+
+    const completo = document.createElement("span");
+    completo.className = "dashboard-brand-full";
+    completo.textContent = texto;
+
+    marca.textContent = "";
+    marca.appendChild(mini);
+    marca.appendChild(completo);
+
+    marca.dataset.preparada = "true";
+}
+
+// Inicializa la navegación profesional una sola vez.
+function inicializarNavegacionZovrake() {
+    prepararMarca();
+    prepararItemsNavegacion();
+    Router.iniciar();
 }
 
 
@@ -872,6 +1125,9 @@ if (domListo) {
             manejarTabsRequerimientos
         );
     }
+
+    // Navegación profesional: rutas, colapso del menú e historial.
+    inicializarNavegacionZovrake();
 
 }
 

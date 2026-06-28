@@ -2000,3 +2000,142 @@ body{
         padding: 8px 12px;
     }
 }
+
+/* ==========================================================
+   NAVEGACIÓN PROFESIONAL ZOVRAKE (evolución)
+   ----------------------------------------------------------
+   - Scroll sin barras visibles (global), conservando el
+     desplazamiento por ratón, touchpad y gestos táctiles.
+   - Transición de módulos en el área principal.
+   - Menú lateral colapsable con expansión al pasar el mouse,
+     SOLO en escritorio/laptop/tablet con mouse (>= 769px).
+   La experiencia móvil (<= 768px) permanece intacta.
+   ========================================================== */
+
+/* --- Scroll: ocultar barra visible, conservar desplazamiento --- */
+html,
+body{
+    scrollbar-width: none;        /* Firefox */
+    -ms-overflow-style: none;     /* Edge / IE */
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar{
+    width: 0;
+    height: 0;
+    display: none;                /* Chrome, Edge, Safari */
+}
+
+/* --- Transición de módulos en el área principal --- */
+.dashboard-content{
+    transition: opacity 0.22s ease, transform 0.22s ease;
+    will-change: opacity, transform;
+}
+
+.dashboard-content.zv-leaving{
+    opacity: 0;
+    transform: translateY(8px);
+}
+
+/* --- Marca compacta / completa (base: móvil = solo completa) --- */
+.dashboard-brand-mini{
+    display: none;
+}
+
+.dashboard-brand-full{
+    display: inline-block;
+}
+
+.dashboard-nav-text{
+    white-space: nowrap;
+}
+
+/* ==========================================================
+   MENÚ LATERAL COLAPSABLE (SOLO ESCRITORIO >= 769px)
+   ========================================================== */
+
+@media (min-width: 769px){
+
+    /* Rail fijo y estrecho que no empuja el contenido. */
+    .dashboard-sidebar{
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+
+        height: 100vh;
+        width: 84px;
+
+        padding: 24px 16px;
+
+        z-index: 200;
+
+        overflow: hidden;
+
+        transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                    box-shadow 0.25s ease;
+    }
+
+    /* Expansión elegante al pasar el mouse (overlay, sin reflujo). */
+    .dashboard-sidebar:hover{
+        width: 270px;
+
+        overflow-y: auto;
+
+        box-shadow: 0 0 45px rgba(38, 36, 30, 0.18);
+    }
+
+    /* El contenido reserva solo el ancho del rail colapsado. */
+    .dashboard-main{
+        margin-left: 84px;
+    }
+
+    /* Marca: "Z" (colapsada) <-> "ZOVRAKE" (expandida), crossfade. */
+    .dashboard-brand{
+        position: relative;
+        height: 26px;
+    }
+
+    .dashboard-brand-mini,
+    .dashboard-brand-full{
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+
+        display: block;
+
+        text-align: center;
+
+        transition: opacity 0.2s ease;
+    }
+
+    .dashboard-brand-full{
+        opacity: 0;
+    }
+
+    .dashboard-brand-mini{
+        opacity: 1;
+    }
+
+    .dashboard-sidebar:hover .dashboard-brand-full{
+        opacity: 1;
+    }
+
+    .dashboard-sidebar:hover .dashboard-brand-mini{
+        opacity: 0;
+    }
+
+    /* Textos (tagline + etiquetas): ocultos al colapsar, fundido suave. */
+    .dashboard-tagline,
+    .dashboard-nav-text{
+        opacity: 0;
+
+        transition: opacity 0.2s ease;
+    }
+
+    .dashboard-sidebar:hover .dashboard-tagline,
+    .dashboard-sidebar:hover .dashboard-nav-text{
+        opacity: 1;
+    }
+}
