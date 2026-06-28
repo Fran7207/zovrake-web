@@ -2147,3 +2147,813 @@ body::-webkit-scrollbar{
         display: none;
     }
 }
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "PANEL DE CONTROL"
+   ----------------------------------------------------------
+   Centro de Operaciones del Residente. Vive dentro de
+   #req-workspace y reutiliza las variables del Dashboard
+   (--dash-*). Solo añade tokens propios de estado/prioridad.
+   ========================================================== */
+
+.pc{
+    /* Tokens de estado y prioridad (alcance local del panel). */
+    --pc-borrador:  #8A8578;
+    --pc-enviado:   #3B7DD8;
+    --pc-observado: #C98A1E;
+    --pc-aprobado:  #2E9E5B;
+    --pc-rechazado: #C5463B;
+    --pc-cerrado:   #6B7280;
+    --pc-urgente:   #C5463B;
+    --pc-radius:    14px;
+
+    display: flex;
+    flex-direction: column;
+
+    gap: 22px;
+}
+
+.pc-section{
+    display: block;
+}
+
+/* Etiqueta discreta de cada bloque (sin encabezados grandes). */
+.pc-label{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    color: var(--dash-text-soft);
+
+    font-size: 12px;
+    font-weight: 700;
+
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+
+    margin-bottom: 12px;
+}
+
+.pc-count{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 20px;
+    height: 18px;
+    padding: 0 6px;
+
+    background: var(--pc-urgente);
+    color: #FFFFFF;
+
+    font-size: 11px;
+    font-weight: 700;
+
+    border-radius: 9px;
+}
+
+.pc-empty{
+    color: var(--dash-text-soft);
+
+    font-size: 14px;
+
+    padding: 18px;
+
+    background: var(--dash-sidebar);
+    border: 1px dashed var(--dash-border);
+    border-radius: var(--pc-radius);
+}
+
+/* ==========================
+   KPIGrid
+========================== */
+
+.pc-kpi-grid{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+}
+
+.pc-kpi{
+    position: relative;
+
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    text-align: left;
+
+    padding: 16px 16px 16px 18px;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-left: 3px solid var(--dash-border);
+    border-radius: var(--pc-radius);
+
+    cursor: pointer;
+
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.pc-kpi:hover{
+    transform: translateY(-3px);
+    box-shadow: 0 12px 28px rgba(38, 36, 30, 0.10);
+}
+
+.pc-kpi-value{
+    color: var(--dash-text);
+
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1;
+
+    letter-spacing: -0.5px;
+}
+
+.pc-kpi-label{
+    color: var(--dash-text-soft);
+
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Acento por tipo de KPI (borde izquierdo + número). */
+.pc-kpi.is-total{     border-left-color: var(--dash-accent); }
+.pc-kpi.is-borrador{  border-left-color: var(--pc-borrador); }
+.pc-kpi.is-enviado{   border-left-color: var(--pc-enviado); }
+.pc-kpi.is-observado{ border-left-color: var(--pc-observado); }
+.pc-kpi.is-aprobado{  border-left-color: var(--pc-aprobado); }
+.pc-kpi.is-rechazado{ border-left-color: var(--pc-rechazado); }
+.pc-kpi.is-urgente{   border-left-color: var(--pc-urgente); }
+.pc-kpi.is-cerrado{   border-left-color: var(--pc-cerrado); }
+
+.pc-kpi.is-urgente .pc-kpi-value{ color: var(--pc-urgente); }
+.pc-kpi.is-total .pc-kpi-value{ color: var(--dash-accent); }
+
+.pc-kpi:hover.is-total{     border-color: var(--dash-accent); }
+.pc-kpi:hover.is-urgente{   border-color: var(--pc-urgente); }
+
+/* ==========================
+   QuickActions
+========================== */
+
+.pc-actions{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.pc-action{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    background: var(--dash-bg);
+    color: var(--dash-text);
+
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+
+    padding: 9px 14px;
+
+    font-size: 13.5px;
+    font-weight: 600;
+
+    cursor: pointer;
+
+    transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.pc-action:hover{
+    background: var(--dash-hover);
+    border-color: var(--dash-accent);
+    transform: translateY(-1px);
+}
+
+.pc-action-icon{
+    display: inline-flex;
+    color: var(--dash-accent);
+}
+
+.pc-action-icon svg{
+    width: 16px;
+    height: 16px;
+}
+
+/* ==========================
+   AlertCenter
+========================== */
+
+.pc-alerts{
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pc-alert{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    width: 100%;
+    text-align: left;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+
+    padding: 12px 14px;
+
+    cursor: pointer;
+
+    transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.pc-alert:hover{
+    background: var(--dash-hover);
+    transform: translateX(2px);
+}
+
+.pc-alert-dot{
+    flex-shrink: 0;
+
+    width: 10px;
+    height: 10px;
+
+    border-radius: 50%;
+
+    background: var(--dash-text-soft);
+}
+
+.pc-alert.is-vencido .pc-alert-dot,
+.pc-alert.is-urgente .pc-alert-dot{ background: var(--pc-rechazado); }
+.pc-alert.is-observado .pc-alert-dot{ background: var(--pc-observado); }
+.pc-alert.is-correccion .pc-alert-dot{ background: var(--pc-enviado); }
+
+.pc-alert.is-vencido{ border-left: 3px solid var(--pc-rechazado); }
+.pc-alert.is-urgente{ border-left: 3px solid var(--pc-urgente); }
+.pc-alert.is-observado{ border-left: 3px solid var(--pc-observado); }
+.pc-alert.is-correccion{ border-left: 3px solid var(--pc-enviado); }
+
+.pc-alert-body{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    flex: 1;
+    min-width: 0;
+}
+
+.pc-alert-title{
+    color: var(--dash-text);
+
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.pc-alert-meta{
+    color: var(--dash-text-soft);
+
+    font-size: 12.5px;
+}
+
+.pc-alert-arrow{
+    color: var(--dash-text-soft);
+    font-size: 20px;
+    line-height: 1;
+}
+
+/* ==========================
+   SummaryTable
+========================== */
+
+.pc-table-wrap{
+    overflow-x: auto;
+
+    border: 1px solid var(--dash-border);
+    border-radius: var(--pc-radius);
+}
+
+.pc-table{
+    width: 100%;
+
+    border-collapse: collapse;
+
+    font-size: 13.5px;
+}
+
+.pc-table thead th{
+    color: var(--dash-text-soft);
+
+    font-size: 11.5px;
+    font-weight: 700;
+
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+
+    text-align: left;
+
+    padding: 12px 14px;
+
+    background: var(--dash-sidebar);
+    border-bottom: 1px solid var(--dash-border);
+
+    white-space: nowrap;
+}
+
+.pc-table tbody tr{
+    cursor: pointer;
+
+    transition: background 0.15s;
+}
+
+.pc-table tbody tr:hover{
+    background: var(--dash-hover);
+}
+
+.pc-table tbody td{
+    color: var(--dash-text);
+
+    padding: 11px 14px;
+
+    border-bottom: 1px solid var(--dash-border);
+
+    white-space: nowrap;
+}
+
+.pc-table tbody tr:last-child td{
+    border-bottom: none;
+}
+
+.pc-cell-code{
+    font-weight: 700;
+    color: var(--dash-accent);
+}
+
+.pc-cell-date{
+    color: var(--dash-text-soft);
+}
+
+/* Etiquetas (tags) de estado y prioridad. */
+.pc-tag{
+    display: inline-flex;
+    align-items: center;
+
+    padding: 3px 9px;
+
+    font-size: 12px;
+    font-weight: 600;
+
+    border-radius: 20px;
+
+    white-space: nowrap;
+}
+
+.pc-tag-state.is-borrador{  background: rgba(138,133,120,.14); color: var(--pc-borrador); }
+.pc-tag-state.is-enviado{   background: rgba(59,125,216,.14);  color: var(--pc-enviado); }
+.pc-tag-state.is-observado{ background: rgba(201,138,30,.16);  color: var(--pc-observado); }
+.pc-tag-state.is-aprobado{  background: rgba(46,158,91,.15);   color: var(--pc-aprobado); }
+.pc-tag-state.is-rechazado{ background: rgba(197,70,59,.14);   color: var(--pc-rechazado); }
+.pc-tag-state.is-cerrado{   background: rgba(107,114,128,.14); color: var(--pc-cerrado); }
+
+.pc-tag-prio.is-urgente{ background: rgba(197,70,59,.14);  color: var(--pc-rechazado); }
+.pc-tag-prio.is-alta{    background: rgba(201,138,30,.16); color: var(--pc-observado); }
+.pc-tag-prio.is-media{   background: rgba(59,125,216,.12); color: var(--pc-enviado); }
+.pc-tag-prio.is-baja{    background: rgba(107,114,128,.12);color: var(--pc-cerrado); }
+
+/* ==========================
+   Rejilla de dos columnas
+========================== */
+
+.pc-grid-2{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+}
+
+/* Tarjeta contenedora reutilizable. */
+.pc-card{
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--pc-radius);
+
+    padding: 18px 18px 14px;
+}
+
+.pc-card-title{
+    color: var(--dash-text);
+
+    font-size: 14px;
+    font-weight: 700;
+
+    margin-bottom: 14px;
+}
+
+/* ==========================
+   ActivityTimeline
+========================== */
+
+.pc-timeline{
+    list-style: none;
+
+    position: relative;
+
+    padding-left: 6px;
+}
+
+.pc-tl-item{
+    position: relative;
+
+    display: flex;
+    gap: 12px;
+
+    padding: 0 0 16px 16px;
+
+    cursor: pointer;
+}
+
+.pc-tl-item:last-child{
+    padding-bottom: 0;
+}
+
+/* Línea vertical que une los eventos. */
+.pc-tl-item::before{
+    content: "";
+
+    position: absolute;
+    left: 4px;
+    top: 12px;
+    bottom: -4px;
+
+    width: 2px;
+
+    background: var(--dash-border);
+}
+
+.pc-tl-item:last-child::before{
+    display: none;
+}
+
+.pc-tl-dot{
+    position: absolute;
+    left: 0;
+    top: 4px;
+
+    width: 10px;
+    height: 10px;
+
+    border-radius: 50%;
+
+    background: var(--dash-accent);
+
+    box-shadow: 0 0 0 3px var(--dash-bg);
+}
+
+.pc-tl-item.is-enviado .pc-tl-dot{   background: var(--pc-enviado); }
+.pc-tl-item.is-observado .pc-tl-dot{ background: var(--pc-observado); }
+.pc-tl-item.is-creado .pc-tl-dot{    background: var(--pc-aprobado); }
+
+.pc-tl-body{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pc-tl-text{
+    color: var(--dash-text);
+
+    font-size: 13.5px;
+    font-weight: 600;
+}
+
+.pc-tl-item:hover .pc-tl-text{
+    color: var(--dash-accent);
+}
+
+.pc-tl-meta{
+    color: var(--dash-text-soft);
+
+    font-size: 12px;
+}
+
+/* ==========================
+   StatusBoard
+========================== */
+
+.pc-status{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pc-status-row{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    width: 100%;
+    text-align: left;
+
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+
+    padding: 9px 10px;
+
+    cursor: pointer;
+
+    transition: background 0.18s;
+}
+
+.pc-status-row:hover{
+    background: var(--dash-hover);
+}
+
+.pc-status-dot{
+    width: 9px;
+    height: 9px;
+
+    border-radius: 50%;
+
+    background: var(--dash-text-soft);
+}
+
+.pc-status-row.is-borrador .pc-status-dot{  background: var(--pc-borrador); }
+.pc-status-row.is-enviado .pc-status-dot{   background: var(--pc-enviado); }
+.pc-status-row.is-observado .pc-status-dot{ background: var(--pc-observado); }
+.pc-status-row.is-aprobado .pc-status-dot{  background: var(--pc-aprobado); }
+.pc-status-row.is-cerrado .pc-status-dot{   background: var(--pc-cerrado); }
+
+.pc-status-label{
+    flex: 1;
+
+    color: var(--dash-text);
+
+    font-size: 13.5px;
+    font-weight: 600;
+}
+
+.pc-status-count{
+    color: var(--dash-text-soft);
+
+    font-size: 13px;
+    font-weight: 700;
+
+    min-width: 24px;
+    text-align: right;
+}
+
+/* ==========================
+   DeadlinePanel
+========================== */
+
+.pc-deadlines{
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pc-deadline{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+
+    width: 100%;
+    text-align: left;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+
+    padding: 10px 12px;
+
+    cursor: pointer;
+
+    transition: background 0.18s, border-color 0.18s;
+}
+
+.pc-deadline:hover{
+    background: var(--dash-hover);
+}
+
+/* Vencimiento próximo o vencido: realce visual. */
+.pc-deadline.is-soon{
+    border-color: rgba(197,70,59,.35);
+    background: rgba(197,70,59,.05);
+}
+
+.pc-deadline-main{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.pc-deadline-code{
+    color: var(--dash-accent);
+
+    font-size: 13.5px;
+    font-weight: 700;
+}
+
+.pc-deadline-obra{
+    color: var(--dash-text-soft);
+
+    font-size: 12.5px;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pc-deadline-side{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+
+    flex-shrink: 0;
+}
+
+.pc-deadline-when{
+    color: var(--dash-text-soft);
+
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.pc-deadline.is-soon .pc-deadline-when{
+    color: var(--pc-rechazado);
+}
+
+/* ==========================
+   NotificationPanel
+========================== */
+
+.pc-notifs{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pc-notif{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    width: 100%;
+    text-align: left;
+
+    background: transparent;
+    border: none;
+    border-radius: 10px;
+
+    padding: 9px 10px;
+
+    cursor: pointer;
+
+    transition: background 0.18s;
+}
+
+.pc-notif:hover{
+    background: var(--dash-hover);
+}
+
+.pc-notif-icon{
+    display: inline-flex;
+    flex-shrink: 0;
+
+    color: var(--dash-accent);
+}
+
+.pc-notif-icon svg{
+    width: 18px;
+    height: 18px;
+}
+
+.pc-notif-body{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.pc-notif-text{
+    color: var(--dash-text);
+
+    font-size: 13.5px;
+    font-weight: 600;
+}
+
+.pc-notif-meta{
+    color: var(--dash-text-soft);
+
+    font-size: 12px;
+}
+
+/* ==========================
+   Marcador de submódulos en desarrollo
+========================== */
+
+.pc-placeholder{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+
+    text-align: center;
+
+    min-height: 280px;
+
+    padding: 40px 20px;
+
+    background: var(--dash-sidebar);
+    border: 1px dashed var(--dash-border);
+    border-radius: var(--pc-radius);
+}
+
+.pc-ph-icon{
+    color: var(--dash-accent);
+}
+
+.pc-ph-icon svg{
+    width: 40px;
+    height: 40px;
+}
+
+.pc-ph-title{
+    color: var(--dash-text);
+
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.pc-ph-text{
+    color: var(--dash-text-soft);
+
+    font-size: 14px;
+
+    max-width: 360px;
+}
+
+.pc-ph-context{
+    color: var(--dash-text);
+
+    font-size: 13.5px;
+}
+
+.pc-placeholder .pc-action{
+    margin-top: 8px;
+}
+
+/* ==========================================================
+   RESPONSIVE — PANEL DE CONTROL
+   ----------------------------------------------------------
+   Desktop usa todo el ancho; tablet adapta; móvil apila todo
+   en una sola columna. No altera la experiencia móvil global.
+   ========================================================== */
+
+@media (max-width: 992px){
+
+    .pc-grid-2{
+        grid-template-columns: 1fr;
+    }
+
+    .pc-kpi-grid{
+        grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+    }
+}
+
+@media (max-width: 768px){
+
+    .pc{
+        gap: 18px;
+    }
+
+    .pc-kpi-grid{
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+    }
+
+    .pc-kpi-value{
+        font-size: 24px;
+    }
+
+    .pc-action{
+        flex: 1 1 calc(50% - 10px);
+        justify-content: center;
+    }
+}
+
+@media (max-width: 420px){
+
+    .pc-kpi-grid{
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .pc-action{
+        flex-basis: 100%;
+    }
+}

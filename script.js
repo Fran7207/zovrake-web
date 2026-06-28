@@ -691,18 +691,692 @@ function manejarNavegacionDashboard(evento) {
    en fases posteriores, usando tab.dataset.reqTab como clave.
    -------------------------------------------------------- */
 
+// Marca como activa la pestaña interna indicada por su clave
+// (tab.dataset.reqTab). Única fuente de verdad del estado visual de
+// la navegación horizontal; la reutilizan tanto el clic del usuario
+// como la navegación programática (KPIs, acciones rápidas, etc.).
+function setReqTabActivo(claveTab) {
+    document.querySelectorAll(".req-tab").forEach((t) => {
+        t.classList.toggle("active", t.dataset.reqTab === claveTab);
+    });
+}
+
+// Gestiona el clic en la navegación interna del módulo: marca la
+// pestaña y delega el render del submódulo correspondiente en el
+// Workspace. No altera el Router ni el menú lateral.
 function manejarTabsRequerimientos(evento) {
 
     const tab = evento.target.closest(".req-tab");
 
     if (!tab) return;
 
-    document.querySelectorAll(".req-tab").forEach((t) => {
-        t.classList.remove("active");
-    });
+    setReqTabActivo(tab.dataset.reqTab);
 
-    tab.classList.add("active");
+    ReqWorkspace.render(tab.dataset.reqTab);
 }
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "PANEL DE CONTROL"
+   ----------------------------------------------------------
+   Centro de Operaciones del Residente. Se monta dentro del
+   contenedor existente #req-workspace, reutilizando el Router,
+   la navegación interna (req-tabs) y las variables CSS del
+   Dashboard. No crea páginas, layouts ni routers nuevos.
+
+   Arquitectura de componentes (una responsabilidad cada uno):
+
+     PanelControl
+       ├── KPIGrid            -> tarjetas de indicadores
+       ├── QuickActions       -> accesos rápidos
+       ├── AlertCenter        -> alertas prioritarias
+       ├── SummaryTable       -> bandeja resumen
+       ├── ActivityTimeline   -> actividad reciente
+       ├── StatusBoard        -> resumen por estados
+       ├── DeadlinePanel      -> próximos vencimientos
+       └── NotificationPanel  -> notificaciones recientes
+
+   Arquitectura de datos:
+     El Panel NO almacena ni crea información. Solo CONSULTA el
+     Expediente Digital a través de la capa de lectura
+     `ExpedienteDigital`. Hoy esa capa entrega un conjunto de
+     muestra; el día de mañana basta con sustituir su origen por
+     Supabase sin tocar los componentes.
+   ========================================================== */
+
+/* --------------------------------------------------------
+   CAPA DE CONSULTA: EXPEDIENTE DIGITAL (solo lectura)
+   -------------------------------------------------------- */
+
+const ExpedienteDigital = (function () {
+
+    // Catálogo de estados y su etiqueta visible.
+    const ESTADOS = {
+        borrador:  "Borrador",
+        enviado:   "Enviado",
+        observado: "Observado",
+        aprobado:  "Aprobado",
+        rechazado: "Rechazado",
+        cerrado:   "Cerrado"
+    };
+
+    // Peso de prioridad para ordenar lo más importante primero.
+    const PESO_PRIORIDAD = { Urgente: 4, Alta: 3, Media: 2, Baja: 1 };
+
+    // Fuente de muestra del Expediente Digital. Las fechas se
+    // expresan como desfases en días respecto de "hoy" para que los
+    // vencimientos y la actividad sean coherentes en cualquier fecha.
+    const FUENTE = [
+        { codigo: "REQ-0001", obra: "Torre Norte",      prioridad: "Urgente", estado: "borrador",  responsable: "C. Rivas",  creado: -1,  limite: 2  },
+        { codigo: "REQ-0002", obra: "Planta Sur",       prioridad: "Alta",    estado: "enviado",   responsable: "M. Díaz",   creado: -2,  limite: 5  },
+        { codigo: "REQ-0003", obra: "Puente Río",       prioridad: "Media",   estado: "observado", responsable: "L. Pérez",  creado: -3,  limite: 1  },
+        { codigo: "REQ-0004", obra: "Edificio Central", prioridad: "Urgente", estado: "enviado",   responsable: "C. Rivas",  creado: -2,  limite: 3  },
+        { codigo: "REQ-0005", obra: "Vía Expressa",     prioridad: "Baja",    estado: "aprobado",  responsable: "A. Soto",   creado: -8,  limite: 12 },
+        { codigo: "REQ-0006", obra: "Torre Norte",      prioridad: "Alta",    estado: "cerrado",   responsable: "M. Díaz",   creado: -14, limite: -3 },
+        { codigo: "REQ-0007", obra: "Planta Sur",       prioridad: "Urgente", estado: "observado", responsable: "L. Pérez",  creado: -4,  limite: 1  },
+        { codigo: "REQ-0008", obra: "Almacén 4",        prioridad: "Media",   estado: "borrador",  responsable: "A. Soto",   creado: 0,   limite: 9  },
+        { codigo: "REQ-0009", obra: "Edificio Central", prioridad: "Alta",    estado: "rechazado", responsable: "C. Rivas",  creado: -6,  limite: 7  },
+        { codigo: "REQ-0010", obra: "Puente Río",       prioridad: "Urgente", estado: "enviado",   responsable: "M. Díaz",   creado: -5,  limite: -1 },
+        { codigo: "REQ-0011", obra: "Vía Expressa",     prioridad: "Media",   estado: "aprobado",  responsable: "L. Pérez",  creado: -9,  limite: 15 },
+        { codigo: "REQ-0012", obra: "Torre Norte",      prioridad: "Baja",    estado: "cerrado",   responsable: "A. Soto",   creado: -20, limite: -8 }
+    ];
+
+    // Actividad reciente (línea de tiempo). `hace` en horas.
+    const ACTIVIDAD = [
+        { tipo: "creado",     texto: "Requerimiento creado",            codigo: "REQ-0008", hace: 1  },
+        { tipo: "enviado",    texto: "Requerimiento enviado",           codigo: "REQ-0010", hace: 4  },
+        { tipo: "documento",  texto: "Documento actualizado",           codigo: "REQ-0003", hace: 9  },
+        { tipo: "logistica",  texto: "Logística recibió el expediente", codigo: "REQ-0002", hace: 22 },
+        { tipo: "observado",  texto: "Requerimiento observado",         codigo: "REQ-0007", hace: 30 }
+    ];
+
+    // Notificaciones recientes. `hace` en horas.
+    const NOTIFICACIONES = [
+        { texto: "Material urgente pendiente de gestión", codigo: "REQ-0001", hace: 2  },
+        { texto: "Se solicitó una corrección",            codigo: "REQ-0009", hace: 6  },
+        { texto: "Documento observado por Logística",     codigo: "REQ-0003", hace: 12 },
+        { texto: "Expediente próximo a vencer",           codigo: "REQ-0010", hace: 20 }
+    ];
+
+    // --- Utilidades de fecha (sin librerías externas) ---
+
+    function hoyCero() {
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        return d;
+    }
+
+    function fechaDesdeOffset(dias) {
+        const d = hoyCero();
+        d.setDate(d.getDate() + dias);
+        return d;
+    }
+
+    function diasRestantes(offset) {
+        return offset;
+    }
+
+    // --- Consultas (solo lectura) ---
+
+    // Devuelve una copia de los expedientes con su fecha calculada.
+    function listar() {
+        return FUENTE.map((e) => ({
+            ...e,
+            fechaLimite: fechaDesdeOffset(e.limite),
+            fechaCreado: fechaDesdeOffset(e.creado),
+            diasParaVencer: diasRestantes(e.limite)
+        }));
+    }
+
+    function buscarPorCodigo(codigo) {
+        return listar().find((e) => e.codigo === codigo) || null;
+    }
+
+    // KPIs: total + conteo por estado + urgentes (por prioridad).
+    function obtenerKPIs() {
+        const items = listar();
+        const porEstado = (estado) =>
+            items.filter((e) => e.estado === estado).length;
+
+        return {
+            total:     items.length,
+            borrador:  porEstado("borrador"),
+            enviado:   porEstado("enviado"),
+            observado: porEstado("observado"),
+            aprobado:  porEstado("aprobado"),
+            rechazado: porEstado("rechazado"),
+            cerrado:   porEstado("cerrado"),
+            urgente:   items.filter((e) => e.prioridad === "Urgente").length
+        };
+    }
+
+    // Conteo por estado para el tablero de estados.
+    function obtenerResumenEstados() {
+        const items = listar();
+        return ["borrador", "enviado", "observado", "aprobado", "cerrado"].map(
+            (clave) => ({
+                clave,
+                etiqueta: ESTADOS[clave],
+                total: items.filter((e) => e.estado === clave).length
+            })
+        );
+    }
+
+    // Bandeja resumen: lo más importante primero (prioridad y luego
+    // proximidad de vencimiento). Se limita para sentirse ligera.
+    function obtenerResumenBandeja(limite = 6) {
+        return listar()
+            .filter((e) => e.estado !== "cerrado")
+            .sort((a, b) => {
+                const p = PESO_PRIORIDAD[b.prioridad] - PESO_PRIORIDAD[a.prioridad];
+                return p !== 0 ? p : a.diasParaVencer - b.diasParaVencer;
+            })
+            .slice(0, limite);
+    }
+
+    // Próximos vencimientos: expedientes vivos ordenados por fecha.
+    function obtenerProximosVencimientos(limite = 5) {
+        return listar()
+            .filter((e) => e.estado !== "cerrado" && e.estado !== "aprobado")
+            .sort((a, b) => a.diasParaVencer - b.diasParaVencer)
+            .slice(0, limite);
+    }
+
+    // Alertas activas derivadas del estado real del expediente.
+    function obtenerAlertas() {
+        const items = listar();
+        const alertas = [];
+
+        items.forEach((e) => {
+            if (e.estado !== "cerrado" && e.diasParaVencer < 0) {
+                alertas.push({ tipo: "vencido", titulo: "Requerimiento vencido", expediente: e });
+            }
+            if (e.prioridad === "Urgente" && e.estado === "borrador") {
+                alertas.push({ tipo: "urgente", titulo: "Material urgente sin enviar", expediente: e });
+            }
+            if (e.estado === "observado") {
+                alertas.push({ tipo: "observado", titulo: "Documento observado", expediente: e });
+            }
+            if (e.estado === "rechazado") {
+                alertas.push({ tipo: "correccion", titulo: "Corrección solicitada", expediente: e });
+            }
+        });
+
+        return alertas;
+    }
+
+    function obtenerActividad() {
+        return ACTIVIDAD.slice();
+    }
+
+    function obtenerNotificaciones() {
+        return NOTIFICACIONES.slice();
+    }
+
+    return {
+        ESTADOS,
+        listar,
+        buscarPorCodigo,
+        obtenerKPIs,
+        obtenerResumenEstados,
+        obtenerResumenBandeja,
+        obtenerProximosVencimientos,
+        obtenerAlertas,
+        obtenerActividad,
+        obtenerNotificaciones
+    };
+})();
+
+/* --------------------------------------------------------
+   UTILIDADES DE PRESENTACIÓN (compartidas por los componentes)
+   -------------------------------------------------------- */
+
+const PanelUtils = {
+
+    // Escapa texto para insertarlo de forma segura en innerHTML.
+    escapar(texto) {
+        return String(texto).replace(/[&<>"']/g, (c) => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        })[c]);
+    },
+
+    // Formatea una fecha como dd/mm/aaaa.
+    fecha(fecha) {
+        const dd = String(fecha.getDate()).padStart(2, "0");
+        const mm = String(fecha.getMonth() + 1).padStart(2, "0");
+        return `${dd}/${mm}/${fecha.getFullYear()}`;
+    },
+
+    // Convierte "horas transcurridas" en texto relativo legible.
+    hace(horas) {
+        if (horas < 1) return "hace instantes";
+        if (horas < 24) return `hace ${horas} h`;
+        const dias = Math.round(horas / 24);
+        return dias === 1 ? "hace 1 día" : `hace ${dias} días`;
+    },
+
+    // Texto humano para la cuenta regresiva de un vencimiento.
+    vencimiento(dias) {
+        if (dias < 0) return `Vencido (${Math.abs(dias)} d)`;
+        if (dias === 0) return "Vence hoy";
+        if (dias === 1) return "Vence mañana";
+        return `En ${dias} días`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: KPIGrid — tarjetas de indicadores interactivas
+   -------------------------------------------------------- */
+
+const KPIGrid = {
+
+    // Definición de cada tarjeta: etiqueta, clave de dato y filtro
+    // que aplicará al abrir la Bandeja de Trabajo.
+    TARJETAS: [
+        { clave: "total",     etiqueta: "Total",      mod: "total",     campo: "",          valor: "todos"   },
+        { clave: "borrador",  etiqueta: "Borradores", mod: "borrador",  campo: "estado",    valor: "borrador" },
+        { clave: "enviado",   etiqueta: "Enviados",   mod: "enviado",   campo: "estado",    valor: "enviado" },
+        { clave: "observado", etiqueta: "Observados", mod: "observado", campo: "estado",    valor: "observado" },
+        { clave: "aprobado",  etiqueta: "Aprobados",  mod: "aprobado",  campo: "estado",    valor: "aprobado" },
+        { clave: "rechazado", etiqueta: "Rechazados", mod: "rechazado", campo: "estado",    valor: "rechazado" },
+        { clave: "urgente",   etiqueta: "Urgentes",   mod: "urgente",   campo: "prioridad", valor: "Urgente" },
+        { clave: "cerrado",   etiqueta: "Cerrados",   mod: "cerrado",   campo: "estado",    valor: "cerrado" }
+    ],
+
+    render() {
+        const datos = ExpedienteDigital.obtenerKPIs();
+
+        const tarjetas = this.TARJETAS.map((t) => `
+            <button class="pc-kpi is-${t.mod}" type="button"
+                data-accion="kpi"
+                data-campo="${t.campo}"
+                data-valor="${PanelUtils.escapar(t.valor)}"
+                title="Ver en Bandeja de Trabajo">
+                <span class="pc-kpi-value">${datos[t.clave]}</span>
+                <span class="pc-kpi-label">${t.etiqueta}</span>
+            </button>
+        `).join("");
+
+        return `<div class="pc-kpi-grid">${tarjetas}</div>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: QuickActions — accesos rápidos (Router interno)
+   -------------------------------------------------------- */
+
+const QuickActions = {
+
+    ACCIONES: [
+        { destino: "nuevo-requerimiento", etiqueta: "Nuevo Requerimiento", icono: "M12 5v14M5 12h14" },
+        { destino: "bandeja-trabajo",     etiqueta: "Bandeja de Trabajo",  icono: "M4 6h16M4 12h16M4 18h10" },
+        { destino: "documentos",          etiqueta: "Documentos",          icono: "M7 4h7l4 4v12H7zM14 4v4h4" },
+        { destino: "seguimiento",         etiqueta: "Seguimiento",         icono: "M4 18 9 12l4 4 7-8" }
+    ],
+
+    render() {
+        const botones = this.ACCIONES.map((a) => `
+            <button class="pc-action" type="button"
+                data-accion="quick" data-destino="${a.destino}">
+                <span class="pc-action-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${a.icono}"/></svg>
+                </span>
+                ${a.etiqueta}
+            </button>
+        `).join("");
+
+        return `
+            <section class="pc-section">
+                <p class="pc-label">Acciones rápidas</p>
+                <div class="pc-actions">${botones}</div>
+            </section>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: AlertCenter — alertas prioritarias activas
+   -------------------------------------------------------- */
+
+const AlertCenter = {
+
+    render() {
+        const alertas = ExpedienteDigital.obtenerAlertas();
+
+        if (alertas.length === 0) {
+            return `
+                <section class="pc-section">
+                    <p class="pc-label">Alertas prioritarias</p>
+                    <div class="pc-empty">No hay alertas activas.</div>
+                </section>`;
+        }
+
+        const filas = alertas.map((a) => `
+            <button class="pc-alert is-${a.tipo}" type="button"
+                data-accion="expediente" data-codigo="${a.expediente.codigo}"
+                title="Abrir expediente ${a.expediente.codigo}">
+                <span class="pc-alert-dot"></span>
+                <span class="pc-alert-body">
+                    <span class="pc-alert-title">${a.titulo}</span>
+                    <span class="pc-alert-meta">${a.expediente.codigo} · ${PanelUtils.escapar(a.expediente.obra)}</span>
+                </span>
+                <span class="pc-alert-arrow">›</span>
+            </button>
+        `).join("");
+
+        return `
+            <section class="pc-section">
+                <p class="pc-label">Alertas prioritarias <span class="pc-count">${alertas.length}</span></p>
+                <div class="pc-alerts">${filas}</div>
+            </section>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: SummaryTable — bandeja resumen (ligera)
+   -------------------------------------------------------- */
+
+const SummaryTable = {
+
+    render() {
+        const items = ExpedienteDigital.obtenerResumenBandeja();
+
+        const filas = items.map((e) => `
+            <tr data-accion="expediente" data-codigo="${e.codigo}" title="Abrir expediente ${e.codigo}">
+                <td class="pc-cell-code">${e.codigo}</td>
+                <td>${PanelUtils.escapar(e.obra)}</td>
+                <td><span class="pc-tag pc-tag-prio is-${e.prioridad.toLowerCase()}">${e.prioridad}</span></td>
+                <td><span class="pc-tag pc-tag-state is-${e.estado}">${ExpedienteDigital.ESTADOS[e.estado]}</span></td>
+                <td>${PanelUtils.escapar(e.responsable)}</td>
+                <td class="pc-cell-date">${PanelUtils.fecha(e.fechaCreado)}</td>
+            </tr>
+        `).join("");
+
+        return `
+            <section class="pc-section">
+                <p class="pc-label">Bandeja — resumen</p>
+                <div class="pc-table-wrap zv-no-scrollbar">
+                    <table class="pc-table">
+                        <thead>
+                            <tr>
+                                <th>Código</th><th>Obra</th><th>Prioridad</th>
+                                <th>Estado</th><th>Responsable</th><th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody>${filas}</tbody>
+                    </table>
+                </div>
+            </section>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: ActivityTimeline — actividad reciente
+   -------------------------------------------------------- */
+
+const ActivityTimeline = {
+
+    render() {
+        const eventos = ExpedienteDigital.obtenerActividad();
+
+        const items = eventos.map((ev) => `
+            <li class="pc-tl-item is-${ev.tipo}"
+                data-accion="expediente" data-codigo="${ev.codigo}"
+                title="Abrir expediente ${ev.codigo}">
+                <span class="pc-tl-dot"></span>
+                <span class="pc-tl-body">
+                    <span class="pc-tl-text">${ev.texto}</span>
+                    <span class="pc-tl-meta">${ev.codigo} · ${PanelUtils.hace(ev.hace)}</span>
+                </span>
+            </li>
+        `).join("");
+
+        return `
+            <article class="pc-card">
+                <p class="pc-card-title">Actividad reciente</p>
+                <ul class="pc-timeline">${items}</ul>
+            </article>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: StatusBoard — resumen por estados (filtros)
+   -------------------------------------------------------- */
+
+const StatusBoard = {
+
+    render() {
+        const estados = ExpedienteDigital.obtenerResumenEstados();
+
+        const filas = estados.map((s) => `
+            <button class="pc-status-row is-${s.clave}" type="button"
+                data-accion="estado" data-valor="${s.clave}"
+                title="Filtrar ${s.etiqueta} en la Bandeja">
+                <span class="pc-status-dot"></span>
+                <span class="pc-status-label">${s.etiqueta}</span>
+                <span class="pc-status-count">${s.total}</span>
+            </button>
+        `).join("");
+
+        return `
+            <article class="pc-card">
+                <p class="pc-card-title">Resumen por estados</p>
+                <div class="pc-status">${filas}</div>
+            </article>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: DeadlinePanel — próximos vencimientos
+   -------------------------------------------------------- */
+
+const DeadlinePanel = {
+
+    render() {
+        const items = ExpedienteDigital.obtenerProximosVencimientos();
+
+        const filas = items.map((e) => {
+            const critico = e.diasParaVencer <= 3;
+            return `
+                <button class="pc-deadline ${critico ? "is-soon" : ""}" type="button"
+                    data-accion="expediente" data-codigo="${e.codigo}"
+                    title="Abrir expediente ${e.codigo}">
+                    <span class="pc-deadline-main">
+                        <span class="pc-deadline-code">${e.codigo}</span>
+                        <span class="pc-deadline-obra">${PanelUtils.escapar(e.obra)}</span>
+                    </span>
+                    <span class="pc-deadline-side">
+                        <span class="pc-tag pc-tag-prio is-${e.prioridad.toLowerCase()}">${e.prioridad}</span>
+                        <span class="pc-deadline-when">${PanelUtils.vencimiento(e.diasParaVencer)}</span>
+                    </span>
+                </button>`;
+        }).join("");
+
+        return `
+            <article class="pc-card">
+                <p class="pc-card-title">Próximos vencimientos</p>
+                <div class="pc-deadlines">${filas}</div>
+            </article>`;
+    }
+};
+
+/* --------------------------------------------------------
+   COMPONENTE: NotificationPanel — notificaciones recientes
+   -------------------------------------------------------- */
+
+const NotificationPanel = {
+
+    render() {
+        const notifs = ExpedienteDigital.obtenerNotificaciones();
+
+        const filas = notifs.map((n) => `
+            <button class="pc-notif" type="button"
+                data-accion="expediente" data-codigo="${n.codigo}"
+                title="Abrir expediente ${n.codigo}">
+                <span class="pc-notif-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 4.5 1.8 5.5 1.8 5.5H4.7s1.8-1 1.8-5.5Z"/><path d="M10.2 18.5a2 2 0 0 0 3.6 0"/></svg>
+                </span>
+                <span class="pc-notif-body">
+                    <span class="pc-notif-text">${PanelUtils.escapar(n.texto)}</span>
+                    <span class="pc-notif-meta">${n.codigo} · ${PanelUtils.hace(n.hace)}</span>
+                </span>
+            </button>
+        `).join("");
+
+        return `
+            <article class="pc-card">
+                <p class="pc-card-title">Notificaciones recientes</p>
+                <div class="pc-notifs">${filas}</div>
+            </article>`;
+    }
+};
+
+/* --------------------------------------------------------
+   PANEL DE CONTROL — composición de los componentes
+   --------------------------------------------------------
+   Respeta el orden exacto solicitado:
+     KPIs → Acciones Rápidas → Alertas → Bandeja Resumen →
+     (Actividad | Estados) → (Vencimientos | Notificaciones)
+   -------------------------------------------------------- */
+
+const PanelControl = {
+
+    render() {
+        return `
+            <div class="pc">
+
+                <section class="pc-section">
+                    ${KPIGrid.render()}
+                </section>
+
+                ${QuickActions.render()}
+
+                ${AlertCenter.render()}
+
+                ${SummaryTable.render()}
+
+                <div class="pc-grid-2">
+                    ${ActivityTimeline.render()}
+                    ${StatusBoard.render()}
+                </div>
+
+                <div class="pc-grid-2">
+                    ${DeadlinePanel.render()}
+                    ${NotificationPanel.render()}
+                </div>
+
+            </div>`;
+    }
+};
+
+/* --------------------------------------------------------
+   REQ WORKSPACE — dispatcher del contenedor #req-workspace
+   --------------------------------------------------------
+   Decide qué submódulo se pinta según la clave de la pestaña.
+   Solo "panel-control" está desarrollado; el resto muestran un
+   marcador neutro (estado base del workspace) hasta su fase.
+   Centraliza también la navegación interna programática para
+   reutilizar la misma navegación que el usuario (sin recargas).
+   -------------------------------------------------------- */
+
+const ReqWorkspace = (function () {
+
+    function contenedor() {
+        return document.getElementById("req-workspace");
+    }
+
+    // Etiqueta visible de una pestaña (se lee del propio HTML para
+    // no duplicar textos).
+    function etiquetaTab(claveTab) {
+        const tab = document.querySelector(`.req-tab[data-req-tab="${claveTab}"]`);
+        return tab ? tab.textContent.trim() : claveTab;
+    }
+
+    // Marcador para submódulos aún no desarrollados. No "construye"
+    // otro submódulo: solo informa y ofrece volver al Panel.
+    function placeholder(claveTab, params) {
+        const titulo = etiquetaTab(claveTab);
+
+        let contexto = "";
+        if (params && params.valor && params.valor !== "todos") {
+            contexto = `<p class="pc-ph-context">Filtro recibido: <strong>${PanelUtils.escapar(params.valor)}</strong></p>`;
+        } else if (params && params.codigo) {
+            contexto = `<p class="pc-ph-context">Expediente: <strong>${PanelUtils.escapar(params.codigo)}</strong></p>`;
+        }
+
+        return `
+            <div class="pc-placeholder">
+                <div class="pc-ph-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2"/></svg>
+                </div>
+                <h3 class="pc-ph-title">${titulo}</h3>
+                <p class="pc-ph-text">Este submódulo se habilitará en una próxima fase.</p>
+                ${contexto}
+                <button class="pc-action" type="button" data-accion="volver-panel">Volver al Panel de Control</button>
+            </div>`;
+    }
+
+    // Pinta el submódulo correspondiente dentro del workspace.
+    function render(claveTab, params) {
+        const ws = contenedor();
+        if (!ws) return;
+
+        ws.innerHTML = (claveTab === "panel-control")
+            ? PanelControl.render()
+            : placeholder(claveTab, params);
+
+        ws.scrollTop = 0;
+    }
+
+    // Navegación interna programática: activa la pestaña y pinta su
+    // submódulo. Reutiliza el mismo mecanismo que el clic del usuario.
+    function irATab(claveTab, params) {
+        setReqTabActivo(claveTab);
+        render(claveTab, params);
+    }
+
+    // Abrir un expediente -> Seguimiento (centro del expediente).
+    function abrirExpediente(codigo) {
+        irATab("seguimiento", { codigo });
+    }
+
+    // Delegación de eventos: un único listener para todo el panel.
+    function manejarClic(evento) {
+        const elemento = evento.target.closest("[data-accion]");
+        if (!elemento) return;
+
+        const accion = elemento.dataset.accion;
+
+        if (accion === "kpi" || accion === "estado") {
+            // KPIs y estados abren la Bandeja de Trabajo filtrada.
+            const valor = elemento.dataset.valor || "todos";
+            const campo = elemento.dataset.campo || "estado";
+            irATab("bandeja-trabajo", { campo, valor });
+
+        } else if (accion === "quick") {
+            irATab(elemento.dataset.destino);
+
+        } else if (accion === "expediente") {
+            abrirExpediente(elemento.dataset.codigo);
+
+        } else if (accion === "volver-panel") {
+            irATab("panel-control");
+        }
+    }
+
+    // Arranque del submódulo: enlaza la delegación una sola vez y
+    // pinta la pestaña activa por defecto (Panel de Control).
+    function iniciar() {
+        const ws = contenedor();
+        if (!ws || ws.dataset.iniciado) return;
+
+        ws.addEventListener("click", manejarClic);
+        ws.dataset.iniciado = "true";
+
+        const activa = document.querySelector(".req-tab.active");
+        render(activa ? activa.dataset.reqTab : "panel-control");
+    }
+
+    return { render, irATab, abrirExpediente, iniciar };
+})();
 
 /* ==========================================================
    NAVEGACIÓN PROFESIONAL ZOVRAKE
@@ -1210,6 +1884,10 @@ if (domListo) {
             manejarTabsRequerimientos
         );
     }
+
+    // Submódulo Panel de Control: monta el contenido dentro del
+    // contenedor #req-workspace ya existente (no crea páginas nuevas).
+    ReqWorkspace.iniciar();
 
     // Navegación profesional: rutas, colapso del menú e historial.
     inicializarNavegacionZovrake();
