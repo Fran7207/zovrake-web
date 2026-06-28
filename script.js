@@ -804,8 +804,16 @@ const Router = (function () {
 
         const contenedor = document.querySelector(".dashboard-content");
 
+        // Decide el LAYOUT según la ruta:
+        //  - "/inicio"  -> LAYOUT 1 (Home): menú lateral completo original.
+        //  - cualquier otra ruta -> LAYOUT 2 (Profesional): rail + tooltips.
+        const esInicio = (ruta === RUTA_DEFECTO);
+
         // Reutiliza la lógica existente: estado activo + cambio de vista.
+        // El cambio de layout ocurre dentro del intercambio (durante el fade).
         const intercambiar = () => {
+            dom.dashboardScreen.classList.toggle("layout-pro", !esInicio);
+            Tooltips.ocultar();
             if (navItem) marcarItemActivo(navItem);
             mostrarVistaDashboard(config.vista, config.etiqueta);
         };
@@ -938,10 +946,87 @@ function prepararMarca() {
     marca.dataset.preparada = "true";
 }
 
+/* --------------------------------------------------------
+   TOOLTIPS FLOTANTES (solo LAYOUT PROFESIONAL, escritorio)
+   --------------------------------------------------------
+   Un único nodo anclado a <body> (no lo recorta el overflow
+   del rail). Aparece junto al icono al pasar el mouse; nunca
+   expande el menú. Inactivo en Home y en móvil (sin hover).
+   -------------------------------------------------------- */
+
+const Tooltips = (function () {
+
+    let nodo = null;
+    const consultaEscritorio = window.matchMedia("(min-width: 769px)");
+
+    function activo() {
+        return (
+            dom.dashboardScreen.classList.contains("layout-pro") &&
+            consultaEscritorio.matches
+        );
+    }
+
+    function asegurarNodo() {
+        if (nodo) return nodo;
+        nodo = document.createElement("div");
+        nodo.className = "zv-tooltip";
+        nodo.setAttribute("role", "tooltip");
+        document.body.appendChild(nodo);
+        return nodo;
+    }
+
+    function textoDeItem(item) {
+        const etiqueta = item.querySelector(".dashboard-nav-text");
+        const texto = etiqueta ? etiqueta.textContent.trim() : "";
+        return texto || item.dataset.label || "";
+    }
+
+    function mostrar(item) {
+        if (!activo()) return;
+
+        const texto = textoDeItem(item);
+        if (!texto) return;
+
+        const t = asegurarNodo();
+        t.textContent = texto;
+
+        const r = item.getBoundingClientRect();
+        t.style.left = (r.right + 14) + "px";
+        t.style.top = (r.top + r.height / 2) + "px";
+        t.classList.add("visible");
+    }
+
+    function ocultar() {
+        if (nodo) nodo.classList.remove("visible");
+    }
+
+    function iniciar() {
+        const sidebar = dom.dashboardSidebar;
+        if (!sidebar) return;
+
+        sidebar.addEventListener("mouseover", (e) => {
+            const item = e.target.closest(".dashboard-nav-item");
+            if (item) mostrar(item);
+        });
+
+        sidebar.addEventListener("mouseout", (e) => {
+            const item = e.target.closest(".dashboard-nav-item");
+            if (item) ocultar();
+        });
+
+        // Evita tooltips colgados al navegar o desplazar el rail.
+        sidebar.addEventListener("click", ocultar);
+        sidebar.addEventListener("scroll", ocultar, { passive: true });
+    }
+
+    return { iniciar, ocultar };
+})();
+
 // Inicializa la navegación profesional una sola vez.
 function inicializarNavegacionZovrake() {
     prepararMarca();
     prepararItemsNavegacion();
+    Tooltips.iniciar();
     Router.iniciar();
 }
 

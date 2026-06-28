@@ -2004,12 +2004,12 @@ body{
 /* ==========================================================
    NAVEGACIÓN PROFESIONAL ZOVRAKE (evolución)
    ----------------------------------------------------------
-   - Scroll sin barras visibles (global), conservando el
-     desplazamiento por ratón, touchpad y gestos táctiles.
-   - Transición de módulos en el área principal.
-   - Menú lateral colapsable con expansión al pasar el mouse,
-     SOLO en escritorio/laptop/tablet con mouse (>= 769px).
-   La experiencia móvil (<= 768px) permanece intacta.
+   DOS LAYOUTS independientes sobre el mismo Dashboard:
+     · LAYOUT 1 (Home / Inicio): menú lateral COMPLETO original.
+       No lleva clase: usa el CSS base del Dashboard (intacto).
+     · LAYOUT 2 (Profesional): .dashboard-screen.layout-pro
+       Rail colapsado (solo iconos) + tooltips flotantes.
+       SOLO escritorio (>= 769px). Móvil (<= 768px) intacto.
    ========================================================== */
 
 /* --- Scroll: ocultar barra visible, conservar desplazamiento --- */
@@ -2026,7 +2026,7 @@ body::-webkit-scrollbar{
     display: none;                /* Chrome, Edge, Safari */
 }
 
-/* --- Transición de módulos en el área principal --- */
+/* --- Transición de módulos / cambio de layout en el área principal --- */
 .dashboard-content{
     transition: opacity 0.22s ease, transform 0.22s ease;
     will-change: opacity, transform;
@@ -2037,7 +2037,7 @@ body::-webkit-scrollbar{
     transform: translateY(8px);
 }
 
-/* --- Marca compacta / completa (base: móvil = solo completa) --- */
+/* --- Marca compacta / completa (base: solo la versión completa) --- */
 .dashboard-brand-mini{
     display: none;
 }
@@ -2050,14 +2050,58 @@ body::-webkit-scrollbar{
     white-space: nowrap;
 }
 
+/* --- Tooltip flotante (LAYOUT PROFESIONAL). Nodo anclado a <body>. --- */
+.zv-tooltip{
+    position: fixed;
+    z-index: 1300;
+
+    background: #26241E;
+    color: #F7F6F1;
+
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+
+    padding: 8px 12px;
+    border-radius: 9px;
+
+    white-space: nowrap;
+    pointer-events: none;
+
+    opacity: 0;
+    transform: translateY(-50%) translateX(-4px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+
+    box-shadow: 0 10px 28px rgba(38, 36, 30, 0.24);
+}
+
+.zv-tooltip.visible{
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+}
+
+.zv-tooltip::before{
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -4px;
+
+    width: 9px;
+    height: 9px;
+
+    background: inherit;
+    transform: translateY(-50%) rotate(45deg);
+    border-radius: 2px;
+}
+
 /* ==========================================================
-   MENÚ LATERAL COLAPSABLE (SOLO ESCRITORIO >= 769px)
+   LAYOUT PROFESIONAL: rail colapsado (SOLO ESCRITORIO >= 769px)
    ========================================================== */
 
 @media (min-width: 769px){
 
     /* Rail fijo y estrecho que no empuja el contenido. */
-    .dashboard-sidebar{
+    .dashboard-screen.layout-pro .dashboard-sidebar{
         position: fixed;
         top: 0;
         left: 0;
@@ -2066,76 +2110,40 @@ body::-webkit-scrollbar{
         height: 100vh;
         width: 84px;
 
-        padding: 24px 16px;
+        padding: 24px 14px;
 
         z-index: 200;
 
-        overflow: hidden;
-
-        transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-                    box-shadow 0.25s ease;
-    }
-
-    /* Expansión elegante al pasar el mouse (overlay, sin reflujo). */
-    .dashboard-sidebar:hover{
-        width: 270px;
-
         overflow-y: auto;
-
-        box-shadow: 0 0 45px rgba(38, 36, 30, 0.18);
+        overflow-x: hidden;
     }
 
-    /* El contenido reserva solo el ancho del rail colapsado. */
-    .dashboard-main{
+    /* El contenido reserva solo el ancho del rail. */
+    .dashboard-screen.layout-pro .dashboard-main{
         margin-left: 84px;
     }
 
-    /* Marca: "Z" (colapsada) <-> "ZOVRAKE" (expandida), crossfade. */
-    .dashboard-brand{
-        position: relative;
-        height: 26px;
+    /* Marca compacta: solo la "Z". */
+    .dashboard-screen.layout-pro .dashboard-brand-full,
+    .dashboard-screen.layout-pro .dashboard-tagline,
+    .dashboard-screen.layout-pro .dashboard-nav-text{
+        display: none;
     }
 
-    .dashboard-brand-mini,
-    .dashboard-brand-full{
-        position: absolute;
-        left: 0;
-        right: 0;
-        top: 0;
-
+    .dashboard-screen.layout-pro .dashboard-brand-mini{
         display: block;
-
         text-align: center;
-
-        transition: opacity 0.2s ease;
     }
 
-    .dashboard-brand-full{
-        opacity: 0;
+    /* Ítems centrados (solo icono); el nombre vive en el tooltip. */
+    .dashboard-screen.layout-pro .dashboard-nav-item{
+        justify-content: center;
+        gap: 0;
+        padding: 12px 0;
     }
 
-    .dashboard-brand-mini{
-        opacity: 1;
-    }
-
-    .dashboard-sidebar:hover .dashboard-brand-full{
-        opacity: 1;
-    }
-
-    .dashboard-sidebar:hover .dashboard-brand-mini{
-        opacity: 0;
-    }
-
-    /* Textos (tagline + etiquetas): ocultos al colapsar, fundido suave. */
-    .dashboard-tagline,
-    .dashboard-nav-text{
-        opacity: 0;
-
-        transition: opacity 0.2s ease;
-    }
-
-    .dashboard-sidebar:hover .dashboard-tagline,
-    .dashboard-sidebar:hover .dashboard-nav-text{
-        opacity: 1;
+    /* La bienvenida pertenece únicamente al Home. */
+    .dashboard-screen.layout-pro .dashboard-welcome{
+        display: none;
     }
 }
