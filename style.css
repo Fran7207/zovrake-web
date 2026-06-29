@@ -3601,3 +3601,965 @@ select.nr-input{
         flex-wrap: wrap;
     }
 }
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "DOCUMENTOS"
+   ----------------------------------------------------------
+   Editor profesional del Expediente Digital. Reutiliza las
+   variables del Dashboard (--dash-*). La hoja imita una hoja
+   de cálculo (tipo Excel): rejilla, cabeceras y celdas nítidas.
+   Todas las clases llevan prefijo doc-.
+   ========================================================== */
+
+.doc-container{
+    /* Tokens de los 8 estados del ciclo de vida del documento. */
+    --doc-st-borrador: #C9A227;
+    --doc-st-edicion:  #3B7DD8;
+    --doc-st-listo:    #2E9E5B;
+    --doc-st-enviado:  #8B5CF6;
+    --doc-st-revision: #E08A1E;
+    --doc-st-aprobado: #2E9E5B;
+    --doc-st-observado:#C5463B;
+    --doc-st-cerrado:  #4B5563;
+
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+
+    animation: nr-fade 0.25s ease;
+}
+
+/* --- Panel superior: meta + filtros --- */
+
+.doc-header{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 14px;
+
+    padding: 14px 16px;
+}
+
+.doc-meta{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px 26px;
+}
+
+.doc-meta-item{
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.doc-meta-item span{
+    color: var(--dash-text-soft);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.doc-meta-item strong{
+    color: var(--dash-text);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.doc-filters{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.doc-filter{
+    min-width: 150px;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+/* Estado (badge) reutilizado en meta y celdas. */
+.doc-status{
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px !important;
+}
+
+.doc-status.is-borrador{ color: var(--doc-st-borrador); }
+.doc-status.is-edicion{  color: var(--doc-st-edicion); }
+.doc-status.is-listo{    color: var(--doc-st-listo); }
+.doc-status.is-enviado{  color: var(--doc-st-enviado); }
+.doc-status.is-revision{ color: var(--doc-st-revision); }
+.doc-status.is-aprobado{ color: var(--doc-st-aprobado); }
+.doc-status.is-observado{color: var(--doc-st-observado); }
+.doc-status.is-cerrado{  color: var(--doc-st-cerrado); }
+
+/* --- Cuerpo: sidebar + main --- */
+
+.doc-body{
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 14px;
+
+    align-items: start;
+}
+
+/* --- Panel izquierdo: agrupado por obra --- */
+
+.doc-sidebar{
+    background: var(--dash-sidebar);
+    border: 1px solid var(--dash-border);
+    border-radius: 14px;
+
+    padding: 12px;
+
+    max-height: 70vh;
+    overflow-y: auto;
+
+    position: sticky;
+    top: 0;
+}
+
+.doc-group{
+    margin-bottom: 14px;
+}
+
+.doc-group-head{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 6px 8px;
+    margin-bottom: 4px;
+
+    border-bottom: 1px solid var(--dash-border);
+}
+
+.doc-group-name{
+    color: var(--dash-text);
+    font-size: 12.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.doc-group-code{
+    color: var(--dash-text-soft);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.doc-side-item{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    width: 100%;
+    text-align: left;
+
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
+
+    padding: 8px 9px;
+    margin-bottom: 2px;
+
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.doc-side-item:hover{
+    background: var(--dash-hover);
+}
+
+.doc-side-item.is-active{
+    background: var(--dash-bg);
+    border-color: var(--dash-accent);
+}
+
+.doc-side-dot{
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--dash-text-soft);
+}
+
+.doc-side-dot.is-borrador{ background: var(--doc-st-borrador); }
+.doc-side-dot.is-edicion{  background: var(--doc-st-edicion); }
+.doc-side-dot.is-listo{    background: var(--doc-st-listo); }
+.doc-side-dot.is-enviado{  background: var(--doc-st-enviado); }
+.doc-side-dot.is-revision{ background: var(--doc-st-revision); }
+.doc-side-dot.is-aprobado{ background: var(--doc-st-aprobado); }
+.doc-side-dot.is-observado{background: var(--doc-st-observado); }
+.doc-side-dot.is-cerrado{  background: var(--doc-st-cerrado); }
+
+.doc-side-info{
+    display: flex;
+    flex-direction: column;
+}
+
+.doc-side-exp{
+    color: var(--dash-text);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.doc-side-req{
+    color: var(--dash-text-soft);
+    font-size: 11.5px;
+}
+
+.doc-side-empty{
+    color: var(--dash-text-soft);
+    font-size: 13px;
+    padding: 14px;
+    text-align: center;
+}
+
+/* --- Área principal --- */
+
+.doc-main{
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* --- Barra de herramientas --- */
+
+.doc-toolbar{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+
+    padding: 8px 10px;
+}
+
+.doc-tool-group{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+
+    padding-right: 6px;
+    margin-right: 2px;
+    border-right: 1px solid var(--dash-border);
+}
+
+.doc-tool-group:last-child{ border-right: none; }
+
+.doc-tool-right{
+    margin-left: auto;
+    border-right: none;
+}
+
+.doc-tool{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+
+    color: var(--dash-text);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+
+    padding: 7px 9px;
+
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+
+.doc-tool svg{
+    width: 17px;
+    height: 17px;
+}
+
+.doc-tool:hover:not(:disabled){
+    background: var(--dash-hover);
+    border-color: var(--dash-border);
+}
+
+.doc-tool:disabled{
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.doc-tool.is-primary{
+    background: var(--dash-accent);
+    color: #fff;
+}
+
+.doc-tool.is-primary:hover:not(:disabled){
+    background: #a87c25;
+    border-color: transparent;
+}
+
+/* En pantallas amplias, el texto de las herramientas secundarias
+   se mantiene; en estrechas, se ocultan etiquetas (ver responsive). */
+.doc-tool-label{
+    white-space: nowrap;
+}
+
+/* Menú de descarga. */
+.doc-menu-wrap{
+    position: relative;
+}
+
+.doc-menu{
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 50;
+
+    display: none;
+    flex-direction: column;
+
+    min-width: 160px;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+
+    box-shadow: 0 12px 28px rgba(38, 36, 30, 0.16);
+
+    overflow: hidden;
+}
+
+.doc-menu.is-open{
+    display: flex;
+}
+
+.doc-menu button{
+    background: transparent;
+    border: none;
+    text-align: left;
+
+    color: var(--dash-text);
+    font-size: 13.5px;
+    font-family: inherit;
+
+    padding: 10px 14px;
+    cursor: pointer;
+}
+
+.doc-menu button:hover{
+    background: var(--dash-hover);
+}
+
+/* --- Barra de formato --- */
+
+.doc-format-bar{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 16px;
+
+    background: var(--dash-sidebar);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+
+    padding: 10px 14px;
+}
+
+.doc-fmt{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.doc-fmt > span{
+    color: var(--dash-text-soft);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.doc-fmt input[type="color"]{
+    width: 42px;
+    height: 30px;
+    border: 1px solid var(--dash-border);
+    border-radius: 8px;
+    padding: 2px;
+    background: var(--dash-bg);
+    cursor: pointer;
+}
+
+.doc-fmt select,
+.doc-fmt input[type="file"]{
+    border: 1px solid var(--dash-border);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--dash-bg);
+    color: var(--dash-text);
+}
+
+.doc-fmt input[type="range"]{
+    width: 110px;
+    accent-color: var(--dash-accent);
+}
+
+.doc-fmt-file input[type="file"]{
+    max-width: 150px;
+    font-size: 11.5px;
+}
+
+.doc-seg{
+    display: inline-flex;
+    border: 1px solid var(--dash-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.doc-seg button{
+    background: var(--dash-bg);
+    border: none;
+    border-right: 1px solid var(--dash-border);
+    color: var(--dash-text-soft);
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.doc-seg button:last-child{ border-right: none; }
+
+.doc-seg button.is-on{
+    background: var(--dash-accent);
+    color: #fff;
+}
+
+/* --- Banner de bloqueo --- */
+
+.doc-locked{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+
+    background: rgba(139, 92, 246, .08);
+    border: 1px solid rgba(139, 92, 246, .35);
+    border-radius: 10px;
+
+    padding: 10px 14px;
+
+    color: #5b3aa8;
+    font-size: 13.5px;
+}
+
+/* --- Zona de scroll y HOJA (apariencia tipo Excel) --- */
+
+.doc-scroll{
+    background:
+        repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(0,0,0,0.03) 27px, rgba(0,0,0,0.03) 28px),
+        var(--dash-sidebar);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+
+    padding: 22px;
+
+    max-height: 72vh;
+    overflow: auto;
+}
+
+.doc-sheet{
+    --doc-primary: var(--dash-accent);
+    --doc-text: var(--dash-text);
+
+    max-width: 820px;
+    margin: 0 auto;
+
+    background: #fff;
+    color: var(--doc-text);
+
+    box-shadow: 0 6px 24px rgba(38, 36, 30, 0.16);
+
+    border-radius: 4px;
+}
+
+.doc-sheet.is-readonly [contenteditable]{
+    cursor: default;
+}
+
+/* Realce sutil de las zonas editables (solo en edición). */
+.doc-sheet:not(.is-readonly) [contenteditable]{
+    outline: 1px dashed transparent;
+    border-radius: 3px;
+    transition: outline-color 0.15s, background 0.15s;
+}
+
+.doc-sheet:not(.is-readonly) [contenteditable]:hover{
+    outline-color: var(--dash-border);
+}
+
+.doc-sheet:not(.is-readonly) [contenteditable]:focus{
+    outline: 2px solid var(--doc-primary);
+    background: rgba(182, 138, 46, 0.06);
+}
+
+.doc-paper-head{
+    display: flex;
+    align-items: center;
+    gap: 16px;
+
+    border-bottom: 3px solid var(--doc-primary);
+    padding-bottom: 14px;
+}
+
+.doc-logo-center{ justify-content: center; text-align: center; }
+.doc-logo-right{ flex-direction: row-reverse; }
+
+.doc-logo-img{
+    object-fit: contain;
+}
+
+.doc-logo-mono{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    background: var(--doc-primary);
+    color: #fff;
+
+    font-weight: 700;
+    font-size: 30px;
+
+    border-radius: 10px;
+}
+
+.doc-empresa strong{
+    display: block;
+    color: var(--doc-primary);
+    font-size: 17px;
+    letter-spacing: 0.3px;
+}
+
+.doc-empresa span{
+    display: block;
+    color: #555;
+    font-size: 11.5px;
+}
+
+.doc-title-block{
+    margin: 16px 0;
+}
+
+.doc-doc-title{
+    color: var(--doc-primary);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.doc-doc-subtitle{
+    color: var(--doc-text);
+    font-size: 14px;
+    margin-top: 2px;
+}
+
+.doc-doc-encabezado{
+    color: #666;
+    font-size: 12.5px;
+    margin-top: 2px;
+}
+
+.doc-info{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px 14px;
+
+    margin: 16px 0;
+    padding: 12px;
+
+    background: #f7f7f4;
+    border: 1px solid #e6e3da;
+    border-radius: 6px;
+}
+
+.doc-info > div{
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.doc-info span{
+    color: #888;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.doc-info strong{
+    color: var(--doc-text);
+    font-size: 13px;
+}
+
+.doc-info-wide{
+    grid-column: 1 / -1;
+}
+
+/* Tabla institucional con apariencia de hoja de cálculo. */
+.doc-table{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+
+    margin: 12px 0 6px;
+}
+
+.doc-table th,
+.doc-table td{
+    border: 1px solid #c9c6bd;
+    padding: 7px 9px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.doc-table thead th{
+    background: var(--doc-primary);
+    color: #fff;
+    font-weight: 700;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+
+    position: sticky;
+    top: 0;
+}
+
+.doc-table tbody tr:nth-child(even){
+    background: #faf9f6;
+}
+
+.doc-c-item{ width: 48px; text-align: center; font-weight: 700; }
+.doc-c-um{ width: 70px; }
+.doc-c-cant{ width: 80px; text-align: right; }
+.doc-c-fecha{ width: 120px; }
+.doc-c-acc{ width: 38px; text-align: center; }
+
+.doc-row-del{
+    background: transparent;
+    border: none;
+    color: var(--doc-st-observado);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+}
+
+.doc-add-row{
+    background: transparent;
+    border: 1px dashed #c9c6bd;
+    border-radius: 8px;
+
+    color: #555;
+    font-size: 12.5px;
+    font-family: inherit;
+
+    padding: 7px 12px;
+    margin-top: 4px;
+
+    cursor: pointer;
+}
+
+.doc-add-row:hover{
+    border-color: var(--doc-primary);
+    color: var(--doc-primary);
+}
+
+.doc-obs{
+    margin: 18px 0;
+}
+
+.doc-obs-label{
+    display: block;
+    color: #888;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 4px;
+}
+
+.doc-obs-text{
+    min-height: 48px;
+    border: 1px solid #e6e3da;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 13px;
+    background: #fff;
+}
+
+.doc-firmas{
+    display: flex;
+    gap: 40px;
+
+    margin-top: 46px;
+}
+
+.doc-firma{
+    flex: 1;
+    text-align: center;
+}
+
+.doc-firma-line{
+    border-top: 1px solid #333;
+    margin-bottom: 6px;
+}
+
+.doc-firma strong{
+    display: block;
+    font-size: 13px;
+    color: var(--doc-text);
+}
+
+.doc-firma span{
+    font-size: 11.5px;
+    color: #777;
+}
+
+.doc-paper-foot{
+    margin-top: 28px;
+    padding-top: 10px;
+
+    border-top: 1px solid #ddd;
+
+    color: #888;
+    font-size: 10.5px;
+    text-align: center;
+}
+
+/* --- Panel de Calidad / Historial --- */
+
+.doc-quality,
+.doc-history{
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+
+    padding: 14px 16px;
+}
+
+.doc-quality-head{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    margin-bottom: 10px;
+}
+
+.doc-quality-head h4{
+    color: var(--dash-text);
+    font-size: 15px;
+    font-weight: 700;
+
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.doc-q-ok{ color: var(--doc-st-listo); font-size: 12.5px; }
+.doc-q-bad{ color: var(--doc-st-observado); font-size: 12.5px; }
+
+.doc-q-close{
+    background: transparent;
+    border: none;
+    color: var(--dash-text-soft);
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.doc-q-title{
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin: 8px 0 4px;
+}
+
+.doc-q-title.is-error{ color: var(--doc-st-observado); }
+.doc-q-title.is-warn{ color: var(--doc-st-revision); }
+
+.doc-q-list{
+    margin: 0 0 8px 18px;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.doc-q-list.is-error{ color: #8f342b; }
+.doc-q-list.is-warn{ color: #8a5e12; }
+
+.doc-q-clean{
+    color: var(--doc-st-listo);
+    font-size: 13.5px;
+}
+
+.doc-history-table{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.doc-history-table th,
+.doc-history-table td{
+    border-bottom: 1px solid var(--dash-border);
+    padding: 8px 10px;
+    text-align: left;
+}
+
+.doc-history-table th{
+    color: var(--dash-text-soft);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+/* --- Estado vacío --- */
+
+.doc-empty{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+
+    max-width: 460px;
+    margin: 30px auto;
+
+    background: var(--dash-sidebar);
+    border: 1px dashed var(--dash-border);
+    border-radius: 16px;
+
+    padding: 40px 28px;
+}
+
+.doc-empty-icon{ color: var(--dash-accent); }
+.doc-empty-icon svg{ width: 48px; height: 48px; }
+
+.doc-empty-title{
+    color: var(--dash-text);
+    font-size: 19px;
+    font-weight: 700;
+}
+
+.doc-empty-text{
+    color: var(--dash-text-soft);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.doc-empty-actions{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 6px;
+}
+
+/* --- Toast --- */
+
+.doc-toast{
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1400;
+
+    background: #26241E;
+    color: #F7F6F1;
+
+    font-size: 13.5px;
+    font-weight: 600;
+
+    padding: 12px 20px;
+    border-radius: 10px;
+
+    box-shadow: 0 12px 30px rgba(38, 36, 30, 0.28);
+
+    animation: nr-fade 0.2s ease;
+}
+
+.doc-toast.is-error{ background: #8f342b; }
+
+/* ==========================================================
+   RESPONSIVE — DOCUMENTOS
+   ----------------------------------------------------------
+   PC/Laptop: dos columnas. Tablet/Celular: el panel izquierdo
+   pasa arriba (horizontal) y la barra prioriza iconos.
+   No altera la experiencia móvil global del Dashboard.
+   ========================================================== */
+
+@media (max-width: 992px){
+
+    .doc-body{
+        grid-template-columns: 1fr;
+    }
+
+    .doc-sidebar{
+        position: static;
+        max-height: 220px;
+    }
+}
+
+@media (max-width: 768px){
+
+    .doc-meta{
+        gap: 12px 18px;
+    }
+
+    .doc-filter{
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    /* Prioriza iconos: oculta etiquetas de herramientas. */
+    .doc-tool-label{
+        display: none;
+    }
+
+    .doc-tool.is-primary .doc-tool-label{
+        display: inline;
+    }
+
+    .doc-tool-group{
+        padding-right: 4px;
+    }
+
+    .doc-info{
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .doc-scroll{
+        padding: 12px;
+    }
+
+    .doc-firmas{
+        flex-direction: column;
+        gap: 28px;
+    }
+}
+
+@media (max-width: 480px){
+
+    .doc-info{
+        grid-template-columns: 1fr;
+    }
+
+    .doc-tool-right{
+        margin-left: 0;
+    }
+}

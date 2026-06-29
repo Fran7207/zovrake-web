@@ -1689,11 +1689,114 @@ const RequerimientosDB = (function () {
         return leer(K.documentos, []);
     }
 
+    /* --------------------------------------------------------
+       API adicional para el submódulo DOCUMENTOS
+       --------------------------------------------------------
+       Métodos AÑADIDOS (no alteran los existentes). Permiten al
+       editor profesional leer/actualizar expedientes, asignar el
+       número de Expediente (EXP), registrar historial y versiones,
+       y enviar a Logística. Listos para mapear a Supabase.
+       -------------------------------------------------------- */
+
+    // Busca un expediente por id o por código (REQ/EXP/BORR).
+    function buscarExpediente(idOcodigo) {
+        return listarExpedientes().find(
+            (e) => e.id === idOcodigo || e.codigo === idOcodigo || e.expCodigo === idOcodigo
+        ) || null;
+    }
+
+    // Persiste cualquier cambio sobre un expediente (upsert).
+    function actualizarExpediente(exp) {
+        exp.actualizadoEn = Date.now();
+        return upsert(exp);
+    }
+
+    // Próximo número de Expediente Digital (EXP-#####), global.
+    function siguienteExpCodigo() {
+        const usados = listarExpedientes()
+            .map((e) => e.expCodigo)
+            .filter((c) => c && c.indexOf("EXP-") === 0)
+            .map((c) => parseInt(c.split("-")[1], 10))
+            .filter((n) => !isNaN(n));
+        const max = usados.length ? Math.max(...usados) : 0;
+        return `EXP-${String(max + 1).padStart(5, "0")}`;
+    }
+
+    // Añade una entrada al historial del expediente (usuario, fecha…).
+    function registrarHistorial(exp, accion, version) {
+        const ahora = new Date();
+        if (!Array.isArray(exp.historial)) exp.historial = [];
+        exp.historial.unshift({
+            usuario: (typeof obtenerNombreGuardado === "function" && obtenerNombreGuardado()) || "Usuario",
+            fecha: ahora.toLocaleDateString(),
+            hora: ahora.toLocaleTimeString(),
+            version: version || exp.version || 1,
+            accion,
+            en: ahora.getTime()
+        });
+    }
+
+    // Siembra expedientes de ejemplo COMPLETOS (solo a petición del
+    // usuario desde Documentos). Útil para demostrar el editor cuando
+    // aún no se ha generado ningún Expediente Digital real.
+    function sembrarEjemplos() {
+        const ejemplos = [
+            {
+                obra: "Torre Norte", partida: "Estructuras — Acero",
+                requeridoPor: "C. Rivas", cargoRequerido: "Residente de Obra",
+                recibidoPor: "J. Quispe", cargoRecibido: "Almacenero",
+                lugarEntrega: "Almacén Central — Torre Norte",
+                fecha: new Date().toISOString().slice(0, 10),
+                fechaMaxima: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10),
+                observacionesGenerales: "Material para vaciado de columnas del nivel 3.",
+                materiales: [
+                    { descripcion: "Cemento Portland Tipo I", um: "bls", cantidad: "120", observaciones: "" },
+                    { descripcion: "Fierro corrugado 1/2\"", um: "var", cantidad: "80", observaciones: "Grado 60" },
+                    { descripcion: "Arena gruesa", um: "m3", cantidad: "15", observaciones: "" }
+                ],
+                adjuntos: []
+            },
+            {
+                obra: "Puente Río", partida: "Obras provisionales",
+                requeridoPor: "L. Pérez", cargoRequerido: "Ing. de Campo",
+                recibidoPor: "S. Núñez", cargoRecibido: "Almacenero",
+                lugarEntrega: "Frente de trabajo — Puente Río",
+                fecha: new Date().toISOString().slice(0, 10),
+                fechaMaxima: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10),
+                observacionesGenerales: "Requerimiento urgente para encofrado.",
+                materiales: [
+                    { descripcion: "Madera tornillo 2\"x3\"", um: "und", cantidad: "200", observaciones: "" },
+                    { descripcion: "Clavos 3\"", um: "kg", cantidad: "25", observaciones: "" }
+                ],
+                adjuntos: []
+            },
+            {
+                obra: "Vía Expressa", partida: "Pavimentos",
+                requeridoPor: "A. Soto", cargoRequerido: "Ing. Residente",
+                recibidoPor: "R. Loayza", cargoRecibido: "Logística",
+                lugarEntrega: "Campamento — Vía Expressa",
+                fecha: new Date().toISOString().slice(0, 10),
+                fechaMaxima: new Date(Date.now() + 12 * 86400000).toISOString().slice(0, 10),
+                observacionesGenerales: "",
+                materiales: [
+                    { descripcion: "Asfalto en caliente", um: "ton", cantidad: "40", observaciones: "" },
+                    { descripcion: "Emulsión asfáltica", um: "gal", cantidad: "300", observaciones: "" }
+                ],
+                adjuntos: []
+            }
+        ];
+
+        ejemplos.forEach((e) => generarExpediente(e));
+    }
+
     return {
         obtenerObras, configObra, datosObra,
         sugerirCampo, sugerirPartidas, sugerirMateriales, umDeMaterial,
         listarExpedientes, guardarBorrador, generarExpediente,
-        listarActividad, listarNotificaciones, listarDocumentos
+        listarActividad, listarNotificaciones, listarDocumentos,
+        // API adicional (Documentos):
+        buscarExpediente, actualizarExpediente, siguienteExpCodigo,
+        registrarHistorial, registrarDocumentos, sembrarEjemplos
     };
 })();
 
@@ -2529,12 +2632,1023 @@ const NuevoRequerimiento = (function () {
     return { render, montar };
 })();
 
+/* ==========================================================
+   CONFIGURACIÓN GENERAL — identidad institucional (origen)
+   ----------------------------------------------------------
+   Fuente de la identidad de la empresa (logo, razón social, RUC,
+   colores institucionales, tipografía). El submódulo Documentos
+   la CONSULTA; no la edita. El futuro módulo "Configuración
+   General" administrará estos valores; hoy se entregan por defecto
+   y quedan persistidos para mantener coherencia visual.
+   ========================================================== */
+
+const ConfiguracionGeneral = (function () {
+
+    const CLAVE = "zovrake_config_general";
+
+    const POR_DEFECTO = {
+        empresa: "ZOVRAKE CONSTRUCCIONES S.A.C.",
+        ruc: "20512345678",
+        direccion: "Av. Principal 123 — Lima, Perú",
+        logoUrl: "",                 // vacío -> se muestra el monograma "Z"
+        colorPrimario: "#B68A2E",    // acento institucional (coincide con --dash-accent)
+        colorTexto: "#26241E",
+        fuente: "Arial"
+    };
+
+    // Códigos de obra institucionales (origen: Configuración General).
+    const CODIGOS = {
+        "Torre Norte": "OBR-TN",
+        "Planta Sur": "OBR-PS",
+        "Puente Río": "OBR-PR",
+        "Edificio Central": "OBR-EC",
+        "Vía Expressa": "OBR-VE",
+        "Almacén 4": "OBR-A4"
+    };
+
+    function obtener() {
+        let guardada = null;
+        try { guardada = JSON.parse(localStorage.getItem(CLAVE)); } catch (e) { guardada = null; }
+        return { ...POR_DEFECTO, ...(guardada || {}) };
+    }
+
+    // Deriva un código de obra estable cuando no está catalogado.
+    function codigoObra(nombre) {
+        if (!nombre) return "OBR-—";
+        if (CODIGOS[nombre]) return CODIGOS[nombre];
+        const iniciales = nombre
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .split(/\s+/).map((p) => p[0]).join("").toUpperCase().slice(0, 4);
+        return "OBR-" + (iniciales || "GEN");
+    }
+
+    return { obtener, codigoObra };
+})();
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "DOCUMENTOS"
+   ----------------------------------------------------------
+   Editor Profesional del Expediente Digital. NO registra datos
+   nuevos: toda la información proviene del Expediente Digital
+   (generado en Nuevo Requerimiento) y de Configuración General.
+
+   El documento es una HOJA HTML editable con apariencia tipo
+   Microsoft Excel (no es PDF ni imagen). Reutiliza:
+     • RequerimientosDB    -> lectura/actualización del expediente
+     • ConfiguracionGeneral-> identidad institucional
+     • DocumentGenerator   -> exportación PDF / Word / Excel
+     • Ortografia          -> sugerencias del Panel de Calidad
+
+   Estructura: Panel superior (meta + filtros) · Panel izquierdo
+   (expedientes agrupados por obra) · Barra de herramientas ·
+   Hoja editable · Panel de Calidad · Historial.
+   ========================================================== */
+
+const Documentos = (function () {
+
+    /* ---------- Estado de trabajo (vive en sesión) ---------- */
+
+    let seleccionId = null;   // id del expediente abierto
+    let docActual = null;     // modelo editable del documento en curso
+    let undoStack = [];       // pila de deshacer (snapshots JSON)
+    let redoStack = [];       // pila de rehacer
+    let snapshotPendiente = null; // estado capturado al empezar a editar un campo
+    let modo = "edicion";     // "edicion" | "preview"
+    let panel = null;         // null | "calidad" | "historial"
+    let menuDescargaAbierto = false;
+
+    /* ---------- Catálogo de estados (8 estados del flujo) ---------- */
+
+    const ESTADOS = {
+        "borrador":          { label: "Borrador",            emoji: "🟡", clase: "borrador" },
+        "en-edicion":        { label: "En edición",          emoji: "🔵", clase: "edicion" },
+        "listo":             { label: "Listo para envío",    emoji: "🟢", clase: "listo" },
+        "enviado-logistica": { label: "Enviado a Logística", emoji: "🟣", clase: "enviado" },
+        "en-revision":       { label: "En revisión",         emoji: "🟠", clase: "revision" },
+        "aprobado":          { label: "Aprobado",            emoji: "✅", clase: "aprobado" },
+        "observado":         { label: "Observado",           emoji: "🔴", clase: "observado" },
+        "cerrado":           { label: "Cerrado",             emoji: "⚫", clase: "cerrado" }
+    };
+
+    // Traduce el estado base del expediente (que alimenta el Panel) al
+    // estado del ciclo de vida del Documento, sin alterar el Panel.
+    function estadoDoc(exp) {
+        if (exp.docEstado && ESTADOS[exp.docEstado]) return exp.docEstado;
+        const mapa = {
+            borrador: "borrador", enviado: "listo", observado: "observado",
+            aprobado: "aprobado", rechazado: "observado", cerrado: "cerrado"
+        };
+        return mapa[exp.estado] || "listo";
+    }
+
+    /* ---------- Utilidades ---------- */
+
+    const esc = (t) => PanelUtils.escapar(t == null ? "" : t);
+    const clon = (o) => JSON.parse(JSON.stringify(o));
+
+    function fechaHora(ms) {
+        if (!ms) return "—";
+        const d = new Date(ms);
+        return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    }
+
+    function root() {
+        return document.querySelector("#doc-container");
+    }
+
+    function bloqueado(exp) {
+        return !!exp && !!exp.bloqueado;
+    }
+
+    /* ---------- Acceso a expedientes (solo lectura/edición) ---------- */
+
+    // Expedientes que ya tienen Expediente Digital (no borradores) y,
+    // por tanto, son editables aquí. Asigna Nº de Expediente si falta.
+    function listarParaDocumentos() {
+        const lista = RequerimientosDB.listarExpedientes()
+            .filter((e) => e.estado !== "borrador");
+
+        let cambios = false;
+        lista.forEach((e) => {
+            if (!e.expCodigo) {
+                e.expCodigo = RequerimientosDB.siguienteExpCodigo();
+                RequerimientosDB.actualizarExpediente(e);
+                cambios = true;
+            }
+        });
+        // Si se asignaron códigos, releer para reflejar el orden real.
+        return cambios
+            ? RequerimientosDB.listarExpedientes().filter((e) => e.estado !== "borrador")
+            : lista;
+    }
+
+    /* ---------- Construcción del modelo de documento ---------- */
+
+    // Crea el modelo editable a partir del Expediente Digital + la
+    // Configuración General. Es lo que hace "Regenerar Documento".
+    function construirDoc(exp) {
+        const cfg = ConfiguracionGeneral.obtener();
+        return {
+            // Identidad (solo presentación; el origen es Configuración General).
+            logoUrl: cfg.logoUrl || "",
+            logoPos: "left",
+            logoSize: 64,
+            // Textos editables.
+            titulo: "REQUERIMIENTO DE MATERIALES",
+            subtitulo: exp.partida || "",
+            encabezado: cfg.empresa,
+            pie: `Documento generado en ZOVRAKE — ${cfg.empresa} · RUC ${cfg.ruc}`,
+            observaciones: exp.observacionesGenerales || "",
+            lugarEntrega: exp.lugarEntrega || "",
+            // Formato.
+            colorPrimario: cfg.colorPrimario,
+            colorTexto: cfg.colorTexto,
+            fuente: cfg.fuente,
+            alinear: "left",
+            margen: 32,
+            // Tabla institucional (orden de columnas del documento oficial).
+            filas: (exp.materiales || []).map((m) => ({
+                um: m.um || "",
+                cantidad: m.cantidad || "",
+                descripcion: m.descripcion || "",
+                fechaMax: exp.fechaMaxima || "",
+                observaciones: m.observaciones || ""
+            })),
+            // Firmas (provienen del expediente).
+            firmas: [
+                { rol: "Requerido por", nombre: exp.requeridoPor || "", cargo: exp.cargoRequerido || "" },
+                { rol: "Recibido por", nombre: exp.recibidoPor || "", cargo: exp.cargoRecibido || "" }
+            ]
+        };
+    }
+
+    /* ---------- RENDER: shell completo del submódulo ---------- */
+
+    function render(params) {
+        const lista = listarParaDocumentos();
+
+        // Selección inicial: por parámetro, o el primero disponible.
+        if (params && params.codigo) {
+            const enc = lista.find((e) => e.codigo === params.codigo || e.expCodigo === params.codigo);
+            seleccionId = enc ? enc.id : (lista[0] && lista[0].id);
+        } else if (!seleccionId || !lista.find((e) => e.id === seleccionId)) {
+            seleccionId = lista[0] ? lista[0].id : null;
+        }
+
+        if (lista.length === 0) {
+            return `<div class="doc-container" id="doc-container">${estadoVacio()}</div>`;
+        }
+
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        docActual = exp.documento ? clon(exp.documento) : construirDoc(exp);
+        undoStack = []; redoStack = []; snapshotPendiente = null;
+        modo = "edicion"; panel = null;
+
+        return `
+            <div class="doc-container" id="doc-container">
+                ${pintarTop(exp, lista)}
+                <div class="doc-body">
+                    <aside class="doc-sidebar zv-no-scrollbar" id="doc-sidebar">${pintarSidebar(lista)}</aside>
+                    <section class="doc-main" id="doc-main">${pintarMain(exp)}</section>
+                </div>
+                <div class="doc-toast" id="doc-toast" hidden></div>
+            </div>`;
+    }
+
+    function estadoVacio() {
+        return `
+            <div class="doc-empty">
+                <div class="doc-empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M9.5 13h6M9.5 16.5h6"/></svg>
+                </div>
+                <h3 class="doc-empty-title">Aún no hay Expedientes Digitales</h3>
+                <p class="doc-empty-text">
+                    Genera un Expediente Digital desde <strong>Nuevo Requerimiento</strong> y aparecerá aquí
+                    para editarlo profesionalmente. También puedes cargar ejemplos para explorar el editor.
+                </p>
+                <div class="doc-empty-actions">
+                    <button class="nr-btn nr-btn-primary" type="button" data-accion="quick" data-destino="nuevo-requerimiento">Crear requerimiento</button>
+                    <button class="nr-btn nr-btn-soft" type="button" data-doc-tool="sembrar">Cargar ejemplos</button>
+                </div>
+            </div>`;
+    }
+
+    /* ---------- Panel superior: meta + filtros ---------- */
+
+    function pintarTop(exp, lista) {
+        const est = ESTADOS[estadoDoc(exp)];
+        const cfg = ConfiguracionGeneral.obtener();
+
+        const obras = [...new Set(lista.map((e) => e.obra))];
+        const estadosPresentes = [...new Set(lista.map((e) => estadoDoc(e)))];
+
+        return `
+            <div class="doc-header">
+                <div class="doc-meta" id="doc-meta">
+                    <div class="doc-meta-item"><span>N.º Expediente</span><strong>${esc(exp.expCodigo)}</strong></div>
+                    <div class="doc-meta-item"><span>N.º Requerimiento</span><strong>${esc(exp.codigo)}</strong></div>
+                    <div class="doc-meta-item"><span>Obra</span><strong>${esc(exp.obra)}</strong></div>
+                    <div class="doc-meta-item"><span>Estado</span><strong class="doc-status is-${est.clase}">${est.emoji} ${est.label}</strong></div>
+                    <div class="doc-meta-item"><span>Creación</span><strong>${fechaHora(exp.creadoEn)}</strong></div>
+                    <div class="doc-meta-item"><span>Última actualización</span><strong>${fechaHora(exp.actualizadoEn)}</strong></div>
+                </div>
+                <div class="doc-filters">
+                    <input class="nr-input doc-filter" type="search" placeholder="Buscar expediente…" data-doc-filter="texto">
+                    <select class="nr-input doc-filter" data-doc-filter="obra">
+                        <option value="">Todas las obras</option>
+                        ${obras.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}
+                    </select>
+                    <select class="nr-input doc-filter" data-doc-filter="estado">
+                        <option value="">Todos los estados</option>
+                        ${estadosPresentes.map((s) => `<option value="${s}">${ESTADOS[s].emoji} ${ESTADOS[s].label}</option>`).join("")}
+                    </select>
+                </div>
+            </div>`;
+    }
+
+    /* ---------- Panel izquierdo: agrupado por obra ---------- */
+
+    function filtros() {
+        const r = root();
+        if (!r) return { texto: "", obra: "", estado: "" };
+        const v = (sel) => { const el = r.querySelector(`[data-doc-filter="${sel}"]`); return el ? el.value.trim() : ""; };
+        return { texto: v("texto").toLowerCase(), obra: v("obra"), estado: v("estado") };
+    }
+
+    function pintarSidebar(lista) {
+        const f = filtros();
+
+        const filtrada = lista.filter((e) => {
+            if (f.obra && e.obra !== f.obra) return false;
+            if (f.estado && estadoDoc(e) !== f.estado) return false;
+            if (f.texto) {
+                const blob = `${e.expCodigo} ${e.codigo} ${e.obra}`.toLowerCase();
+                if (!blob.includes(f.texto)) return false;
+            }
+            return true;
+        });
+
+        if (filtrada.length === 0) {
+            return `<p class="doc-side-empty">Sin expedientes que coincidan.</p>`;
+        }
+
+        // Agrupar por obra (nunca mezclar obras distintas).
+        const grupos = {};
+        filtrada.forEach((e) => { (grupos[e.obra] = grupos[e.obra] || []).push(e); });
+
+        return Object.keys(grupos).map((obra) => `
+            <div class="doc-group">
+                <div class="doc-group-head">
+                    <span class="doc-group-name">${esc(obra)}</span>
+                    <span class="doc-group-code">${esc(ConfiguracionGeneral.codigoObra(obra))}</span>
+                </div>
+                ${grupos[obra].map((e) => {
+                    const est = ESTADOS[estadoDoc(e)];
+                    return `
+                        <button type="button" class="doc-side-item ${e.id === seleccionId ? "is-active" : ""}" data-doc-sel="${e.id}">
+                            <span class="doc-side-dot is-${est.clase}" title="${est.label}"></span>
+                            <span class="doc-side-info">
+                                <span class="doc-side-exp">${esc(e.expCodigo)}</span>
+                                <span class="doc-side-req">${esc(e.codigo)}</span>
+                            </span>
+                        </button>`;
+                }).join("")}
+            </div>`).join("");
+    }
+
+    /* ---------- Área principal: toolbar + hoja + paneles ---------- */
+
+    function pintarMain(exp) {
+        const editable = modo === "edicion" && !bloqueado(exp);
+
+        return `
+            ${pintarToolbar(exp)}
+            ${editable ? pintarFormatoBar(docActual) : ""}
+            ${bloqueado(exp) ? bannerBloqueo() : ""}
+            <div class="doc-scroll zv-no-scrollbar" id="doc-scroll">
+                ${pintarHoja(docActual, exp, editable)}
+            </div>
+            ${panel === "calidad" ? pintarCalidad(exp) : ""}
+            ${panel === "historial" ? pintarHistorial(exp) : ""}`;
+    }
+
+    function bannerBloqueo() {
+        return `
+            <div class="doc-locked">
+                <span>🔒 Documento bloqueado tras el envío. Solo lectura. Para corregir, crea una nueva versión.</span>
+                <button type="button" class="nr-btn nr-btn-soft" data-doc-tool="nueva-version">Crear nueva versión</button>
+            </div>`;
+    }
+
+    /* ---------- Barra de herramientas ---------- */
+
+    const ICONOS = {
+        undo: "M9 7 4 12l5 5M4 12h11a5 5 0 0 1 0 10h-1",
+        redo: "m15 7 5 5-5 5M20 12H9a5 5 0 0 0 0 10h1",
+        guardar: "M5 4h11l3 3v13H5zM8 4v5h7M8 14h8v6H8z",
+        regenerar: "M4 12a8 8 0 0 1 14-5l2 2M20 12a8 8 0 0 1-14 5l-2-2M18 4v5h-5M6 20v-5h5",
+        preview: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+        calidad: "M9 12l2 2 4-5M12 3l7 3v6c0 5-3.5 7.5-7 9-3.5-1.5-7-4-7-9V6z",
+        descargar: "M12 4v10M8 11l4 4 4-4M5 20h14",
+        imprimir: "M7 8V3h10v5M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v6H7z",
+        enviar: "M4 12 20 4l-6 16-3-7-7-1z",
+        historial: "M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7 3.5M3 4v4h4M12 8v4l3 2"
+    };
+
+    function btn(tool, etiqueta, { primario = false, peligro = false, disabled = false } = {}) {
+        const clase = primario ? "doc-tool is-primary" : (peligro ? "doc-tool is-danger" : "doc-tool");
+        return `
+            <button type="button" class="${clase}" data-doc-tool="${tool}" ${disabled ? "disabled" : ""} title="${etiqueta}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONOS[tool]}"/></svg>
+                <span class="doc-tool-label">${etiqueta}</span>
+            </button>`;
+    }
+
+    function pintarToolbar(exp) {
+        const lock = bloqueado(exp);
+        return `
+            <div class="doc-toolbar">
+                <div class="doc-tool-group">
+                    ${btn("undo", "Deshacer", { disabled: lock })}
+                    ${btn("redo", "Rehacer", { disabled: lock })}
+                </div>
+                <div class="doc-tool-group">
+                    ${btn("guardar", "Guardar cambios", { disabled: lock })}
+                    ${btn("regenerar", "Regenerar", { disabled: lock })}
+                </div>
+                <div class="doc-tool-group">
+                    ${btn("preview", modo === "preview" ? "Salir de vista previa" : "Vista previa")}
+                    ${btn("calidad", "Panel de Calidad")}
+                    ${btn("historial", "Historial")}
+                </div>
+                <div class="doc-tool-group doc-tool-right">
+                    <div class="doc-menu-wrap">
+                        ${btn("descargar", "Descargar")}
+                        <div class="doc-menu ${menuDescargaAbierto ? "is-open" : ""}" id="doc-menu-descarga">
+                            <button type="button" data-doc-download="pdf">PDF (.pdf)</button>
+                            <button type="button" data-doc-download="word">Word (.doc)</button>
+                            <button type="button" data-doc-download="excel">Excel (.xls)</button>
+                        </div>
+                    </div>
+                    ${btn("imprimir", "Imprimir")}
+                    ${btn("enviar", "Enviar a Logística", { primario: true, disabled: lock })}
+                </div>
+            </div>`;
+    }
+
+    /* ---------- Barra de formato (personalización total) ---------- */
+
+    function pintarFormatoBar(doc) {
+        const fuentes = ["Arial", "Georgia", "Times New Roman", "Calibri", "Verdana", "Tahoma"];
+        const op = (v, sel) => `<option value="${v}" ${v === sel ? "selected" : ""}>${v}</option>`;
+
+        return `
+            <div class="doc-format-bar zv-no-scrollbar">
+                <label class="doc-fmt"><span>Color</span>
+                    <input type="color" data-doc-fmt="colorPrimario" value="${doc.colorPrimario}"></label>
+                <label class="doc-fmt"><span>Texto</span>
+                    <input type="color" data-doc-fmt="colorTexto" value="${doc.colorTexto}"></label>
+                <label class="doc-fmt"><span>Tipografía</span>
+                    <select data-doc-fmt="fuente">${fuentes.map((f) => op(f, doc.fuente)).join("")}</select></label>
+                <div class="doc-fmt"><span>Alineación</span>
+                    <div class="doc-seg">
+                        <button type="button" data-doc-fmt="alinear" data-val="left" class="${doc.alinear === "left" ? "is-on" : ""}">⬅</button>
+                        <button type="button" data-doc-fmt="alinear" data-val="center" class="${doc.alinear === "center" ? "is-on" : ""}">⬌</button>
+                        <button type="button" data-doc-fmt="alinear" data-val="right" class="${doc.alinear === "right" ? "is-on" : ""}">➡</button>
+                    </div>
+                </div>
+                <label class="doc-fmt"><span>Márgenes</span>
+                    <input type="range" min="12" max="64" step="4" data-doc-fmt="margen" value="${doc.margen}"></label>
+                <div class="doc-fmt"><span>Logo</span>
+                    <div class="doc-seg">
+                        <button type="button" data-doc-fmt="logoPos" data-val="left" class="${doc.logoPos === "left" ? "is-on" : ""}">⬅</button>
+                        <button type="button" data-doc-fmt="logoPos" data-val="center" class="${doc.logoPos === "center" ? "is-on" : ""}">⬌</button>
+                        <button type="button" data-doc-fmt="logoPos" data-val="right" class="${doc.logoPos === "right" ? "is-on" : ""}">➡</button>
+                    </div>
+                </div>
+                <label class="doc-fmt"><span>Tamaño logo</span>
+                    <input type="range" min="40" max="120" step="4" data-doc-fmt="logoSize" value="${doc.logoSize}"></label>
+                <label class="doc-fmt doc-fmt-file"><span>Cambiar logo</span>
+                    <input type="file" accept="image/*" data-doc-fmt="logoUpload"></label>
+            </div>`;
+    }
+
+    /* ---------- La HOJA (documento institucional, tipo Excel) ---------- */
+
+    function pintarHoja(doc, exp, editable) {
+        const cfg = ConfiguracionGeneral.obtener();
+        const ce = editable ? 'contenteditable="true"' : "";
+        const estilo = [
+            `--doc-primary:${doc.colorPrimario}`,
+            `--doc-text:${doc.colorTexto}`,
+            `font-family:'${doc.fuente}',Arial,sans-serif`,
+            `padding:${doc.margen}px`
+        ].join(";");
+
+        const logo = doc.logoUrl
+            ? `<img src="${esc(doc.logoUrl)}" alt="Logo" class="doc-logo-img" style="height:${doc.logoSize}px">`
+            : `<span class="doc-logo-mono" style="width:${doc.logoSize}px;height:${doc.logoSize}px">Z</span>`;
+
+        return `
+            <div class="doc-sheet ${editable ? "" : "is-readonly"}" id="doc-sheet" style="${estilo}">
+                <div class="doc-paper">
+
+                    <header class="doc-paper-head doc-logo-${doc.logoPos}">
+                        <div class="doc-logo">${logo}</div>
+                        <div class="doc-empresa">
+                            <strong>${esc(cfg.empresa)}</strong>
+                            <span>RUC: ${esc(cfg.ruc)}</span>
+                            <span>${esc(cfg.direccion)}</span>
+                        </div>
+                    </header>
+
+                    <div class="doc-title-block" style="text-align:${doc.alinear}">
+                        <h1 class="doc-doc-title" ${ce} data-doc="titulo">${esc(doc.titulo)}</h1>
+                        <p class="doc-doc-subtitle" ${ce} data-doc="subtitulo">${esc(doc.subtitulo)}</p>
+                        <p class="doc-doc-encabezado" ${ce} data-doc="encabezado">${esc(doc.encabezado)}</p>
+                    </div>
+
+                    <div class="doc-info">
+                        <div><span>N.º Expediente</span><strong>${esc(exp.expCodigo)}</strong></div>
+                        <div><span>N.º Requerimiento</span><strong>${esc(exp.codigo)}</strong></div>
+                        <div><span>Código de Obra</span><strong>${esc(ConfiguracionGeneral.codigoObra(exp.obra))}</strong></div>
+                        <div><span>Obra</span><strong>${esc(exp.obra)}</strong></div>
+                        <div><span>Fecha</span><strong>${esc(exp.fecha)}</strong></div>
+                        <div><span>Fecha máxima de ingreso</span><strong>${esc(exp.fechaMaxima)}</strong></div>
+                        <div class="doc-info-wide"><span>Lugar de entrega</span><strong ${ce} data-doc="lugarEntrega">${esc(doc.lugarEntrega)}</strong></div>
+                    </div>
+
+                    <table class="doc-table">
+                        <thead>
+                            <tr>
+                                <th class="doc-c-item">Ítem</th>
+                                <th class="doc-c-um">U.M.</th>
+                                <th class="doc-c-cant">Cantidad</th>
+                                <th>Descripción del Material</th>
+                                <th class="doc-c-fecha">Fecha Máxima de Ingreso</th>
+                                <th>Observaciones</th>
+                                ${editable ? '<th class="doc-c-acc"></th>' : ""}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${doc.filas.map((f, i) => `
+                                <tr>
+                                    <td class="doc-c-item">${i + 1}</td>
+                                    <td class="doc-c-um" ${ce} data-cell data-row="${i}" data-col="um">${esc(f.um)}</td>
+                                    <td class="doc-c-cant" ${ce} data-cell data-row="${i}" data-col="cantidad">${esc(f.cantidad)}</td>
+                                    <td ${ce} data-cell data-row="${i}" data-col="descripcion">${esc(f.descripcion)}</td>
+                                    <td class="doc-c-fecha" ${ce} data-cell data-row="${i}" data-col="fechaMax">${esc(f.fechaMax)}</td>
+                                    <td ${ce} data-cell data-row="${i}" data-col="observaciones">${esc(f.observaciones)}</td>
+                                    ${editable ? `<td class="doc-c-acc"><button type="button" class="doc-row-del" data-doc-row="del" data-row="${i}" title="Eliminar fila">✕</button></td>` : ""}
+                                </tr>`).join("")}
+                        </tbody>
+                    </table>
+                    ${editable ? '<button type="button" class="doc-add-row" data-doc-row="add">+ Agregar fila</button>' : ""}
+
+                    <div class="doc-obs">
+                        <span class="doc-obs-label">Observaciones generales</span>
+                        <div class="doc-obs-text" ${ce} data-doc="observaciones">${esc(doc.observaciones)}</div>
+                    </div>
+
+                    <div class="doc-firmas">
+                        ${doc.firmas.map((s) => `
+                            <div class="doc-firma">
+                                <div class="doc-firma-line"></div>
+                                <strong>${esc(s.nombre)}</strong>
+                                <span>${esc(s.rol)}${s.cargo ? " · " + esc(s.cargo) : ""}</span>
+                            </div>`).join("")}
+                    </div>
+
+                    <footer class="doc-paper-foot" ${ce} data-doc="pie">${esc(doc.pie)}</footer>
+
+                </div>
+            </div>`;
+    }
+
+    /* ---------- Panel de Calidad (validación) ---------- */
+
+    function validar(doc, exp) {
+        const errores = [];
+        const advertencias = [];
+
+        if (!doc.titulo.trim()) errores.push("El título del documento es obligatorio.");
+        if (!exp.obra) errores.push("El expediente no tiene obra asignada.");
+        if (!doc.lugarEntrega.trim()) errores.push("Indica el lugar de entrega.");
+
+        // Fechas.
+        const fGen = new Date(exp.fecha);
+        const fMax = new Date(exp.fechaMaxima);
+        if (isNaN(fGen.getTime())) errores.push("La fecha del documento no es válida.");
+        if (isNaN(fMax.getTime())) errores.push("La fecha máxima de ingreso no es válida.");
+        if (!isNaN(fGen.getTime()) && !isNaN(fMax.getTime()) && fMax < fGen) {
+            errores.push("La fecha máxima no puede ser anterior a la fecha del documento.");
+        }
+
+        // Tabla / cantidades / formato.
+        if (doc.filas.length === 0) {
+            errores.push("El documento debe tener al menos un material.");
+        } else {
+            doc.filas.forEach((f, i) => {
+                if (!f.descripcion.trim()) errores.push(`Ítem ${i + 1}: falta la descripción del material.`);
+                if (!(parseFloat(f.cantidad) > 0)) errores.push(`Ítem ${i + 1}: la cantidad debe ser mayor a 0.`);
+                if (!f.um.trim()) advertencias.push(`Ítem ${i + 1}: sin unidad de medida (U.M.).`);
+            });
+        }
+
+        // Ortografía (no bloquea: solo sugiere).
+        const textos = [doc.observaciones].concat(doc.filas.map((f) => f.descripcion + " " + f.observaciones));
+        const vistos = new Set();
+        textos.forEach((t) => {
+            Ortografia.revisar(t).forEach((h) => {
+                if (!vistos.has(h.palabra.toLowerCase())) {
+                    vistos.add(h.palabra.toLowerCase());
+                    advertencias.push(`Ortografía: «${h.palabra}» → sugerencia «${h.sugerencia}».`);
+                }
+            });
+        });
+
+        return { errores, advertencias };
+    }
+
+    function pintarCalidad(exp) {
+        const { errores, advertencias } = validar(docActual, exp);
+        const ok = errores.length === 0;
+
+        return `
+            <div class="doc-quality">
+                <div class="doc-quality-head">
+                    <h4>Panel de Calidad ${ok ? '<span class="doc-q-ok">✓ Listo para enviar</span>' : `<span class="doc-q-bad">${errores.length} error(es)</span>`}</h4>
+                    <button type="button" class="doc-q-close" data-doc-tool="calidad">✕</button>
+                </div>
+                ${errores.length ? `
+                    <p class="doc-q-title is-error">Errores (deben corregirse antes de enviar)</p>
+                    <ul class="doc-q-list is-error">${errores.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
+                ${advertencias.length ? `
+                    <p class="doc-q-title is-warn">Advertencias (no bloquean el envío)</p>
+                    <ul class="doc-q-list is-warn">${advertencias.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+                ${ok && !advertencias.length ? `<p class="doc-q-clean">El documento superó todas las validaciones.</p>` : ""}
+            </div>`;
+    }
+
+    /* ---------- Historial ---------- */
+
+    function pintarHistorial(exp) {
+        const items = (exp.historial || []);
+        return `
+            <div class="doc-history">
+                <div class="doc-quality-head">
+                    <h4>Historial del expediente</h4>
+                    <button type="button" class="doc-q-close" data-doc-tool="historial">✕</button>
+                </div>
+                ${items.length === 0 ? `<p class="doc-q-clean">Sin movimientos registrados.</p>` : `
+                    <table class="doc-history-table">
+                        <thead><tr><th>Fecha</th><th>Hora</th><th>Usuario</th><th>Versión</th><th>Acción</th></tr></thead>
+                        <tbody>
+                            ${items.map((h) => `
+                                <tr>
+                                    <td>${esc(h.fecha)}</td><td>${esc(h.hora)}</td>
+                                    <td>${esc(h.usuario)}</td><td>v${esc(h.version)}</td>
+                                    <td>${esc(h.accion)}</td>
+                                </tr>`).join("")}
+                        </tbody>
+                    </table>`}
+            </div>`;
+    }
+
+    /* ---------- Repintado parcial (sin perder listeners) ---------- */
+
+    function repintarMain() {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        const main = root().querySelector("#doc-main");
+        if (main && exp) main.innerHTML = pintarMain(exp);
+    }
+
+    function repintarMeta() {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        const cont = root();
+        if (!cont || !exp) return;
+        const header = cont.querySelector(".doc-header");
+        if (header) {
+            const lista = listarParaDocumentos();
+            const tmp = document.createElement("div");
+            tmp.innerHTML = pintarTop(exp, lista);
+            // Reemplaza solo el bloque meta para no resetear los filtros.
+            const nuevaMeta = tmp.querySelector("#doc-meta");
+            const metaActual = header.querySelector("#doc-meta");
+            if (nuevaMeta && metaActual) metaActual.innerHTML = nuevaMeta.innerHTML;
+        }
+    }
+
+    function repintarSidebar() {
+        const lista = listarParaDocumentos();
+        const sb = root().querySelector("#doc-sidebar");
+        if (sb) sb.innerHTML = pintarSidebar(lista);
+    }
+
+    /* ---------- Undo / Redo ---------- */
+
+    function actualizarUndoUI() {
+        const cont = root();
+        if (!cont) return;
+        const u = cont.querySelector('[data-doc-tool="undo"]');
+        const r = cont.querySelector('[data-doc-tool="redo"]');
+        if (u) u.disabled = undoStack.length === 0;
+        if (r) r.disabled = redoStack.length === 0;
+    }
+
+    // Captura el estado actual antes de un cambio estructural/control.
+    function capturar() {
+        undoStack.push(clon(docActual));
+        if (undoStack.length > 60) undoStack.shift();
+        redoStack = [];
+        actualizarUndoUI();
+    }
+
+    function deshacer() {
+        if (undoStack.length === 0) return;
+        redoStack.push(clon(docActual));
+        docActual = undoStack.pop();
+        repintarMain();
+        actualizarUndoUI();
+    }
+
+    function rehacer() {
+        if (redoStack.length === 0) return;
+        undoStack.push(clon(docActual));
+        docActual = redoStack.pop();
+        repintarMain();
+        actualizarUndoUI();
+    }
+
+    /* ---------- Toast ---------- */
+
+    let toastTimer = null;
+    function toast(msg, tipo = "ok") {
+        const t = root() && root().querySelector("#doc-toast");
+        if (!t) return;
+        t.className = `doc-toast is-${tipo}`;
+        t.textContent = msg;
+        t.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+    }
+
+    /* ---------- Acciones ---------- */
+
+    function guardarCambios(silencioso) {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        exp.documento = clon(docActual);
+        if (estadoDoc(exp) !== "enviado-logistica" && !bloqueado(exp)) {
+            exp.docEstado = "en-edicion";
+        }
+        RequerimientosDB.registrarHistorial(exp, "Guardó cambios del documento", exp.version || 1);
+        RequerimientosDB.actualizarExpediente(exp);
+        repintarMeta();
+        repintarSidebar();
+        if (!silencioso) toast("Cambios guardados.");
+    }
+
+    function regenerar() {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        capturar();
+        docActual = construirDoc(exp);
+        repintarMain();
+        toast("Documento regenerado desde el Expediente Digital.");
+    }
+
+    function alternarPreview() {
+        modo = (modo === "preview") ? "edicion" : "preview";
+        repintarMain();
+    }
+
+    function alternarPanel(cual) {
+        panel = (panel === cual) ? null : cual;
+        repintarMain();
+    }
+
+    // Construye un objeto compatible con DocumentGenerator a partir
+    // del documento editado (reutiliza la exportación existente).
+    function expCompatible(doc, exp) {
+        return {
+            codigo: exp.codigo, obra: exp.obra, partida: exp.partida,
+            requeridoPor: exp.requeridoPor, cargoRequerido: exp.cargoRequerido,
+            recibidoPor: exp.recibidoPor, cargoRecibido: exp.cargoRecibido,
+            lugarEntrega: doc.lugarEntrega || exp.lugarEntrega,
+            fecha: exp.fecha, fechaMaxima: exp.fechaMaxima,
+            observacionesGenerales: doc.observaciones || exp.observacionesGenerales,
+            materiales: doc.filas.map((f) => ({
+                descripcion: f.descripcion, um: f.um,
+                cantidad: f.cantidad, observaciones: f.observaciones
+            }))
+        };
+    }
+
+    function descargar(tipo) {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        const compat = expCompatible(docActual, exp);
+        if (tipo === "pdf") DocumentGenerator.descargarPDF(compat);
+        else if (tipo === "word") DocumentGenerator.descargarWord(compat);
+        else DocumentGenerator.descargarExcel(compat);
+        toast(`Generando ${tipo.toUpperCase()}…`);
+    }
+
+    function imprimir() {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        const hojaHTML = pintarHoja(docActual, exp, false);
+        const ventana = window.open("", "_blank");
+        if (!ventana) { toast("Habilita las ventanas emergentes para imprimir.", "error"); return; }
+        ventana.document.write(`
+            <html><head><meta charset="utf-8"><title>${esc(exp.expCodigo)}</title>
+            <style>
+                body{font-family:'${docActual.fuente}',Arial,sans-serif;color:${docActual.colorTexto};margin:0;padding:20px}
+                .doc-paper{max-width:800px;margin:auto}
+                .doc-paper-head{display:flex;gap:16px;align-items:center;border-bottom:3px solid ${docActual.colorPrimario};padding-bottom:12px;margin-bottom:14px}
+                .doc-logo-center{justify-content:center}.doc-logo-right{flex-direction:row-reverse}
+                .doc-logo-mono{display:inline-flex;align-items:center;justify-content:center;background:${docActual.colorPrimario};color:#fff;font-weight:700;border-radius:8px;font-size:28px}
+                .doc-empresa strong{display:block;font-size:16px;color:${docActual.colorPrimario}}
+                .doc-empresa span{display:block;font-size:11px;color:#555}
+                .doc-doc-title{color:${docActual.colorPrimario};margin:0 0 4px;font-size:20px}
+                .doc-info{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:14px 0;font-size:12px}
+                .doc-info span{display:block;color:#777;font-size:10px;text-transform:uppercase}
+                table.doc-table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}
+                .doc-table th,.doc-table td{border:1px solid #999;padding:6px 8px;text-align:left}
+                .doc-table th{background:${docActual.colorPrimario};color:#fff}
+                .doc-firmas{display:flex;gap:40px;margin-top:48px}
+                .doc-firma{flex:1;text-align:center}.doc-firma-line{border-top:1px solid #333;margin-bottom:6px}
+                .doc-paper-foot{margin-top:30px;border-top:1px solid #ccc;padding-top:8px;font-size:10px;color:#777;text-align:center}
+                .doc-obs-label{font-size:10px;text-transform:uppercase;color:#777}
+            </style></head>
+            <body>${hojaHTML}<script>window.onload=function(){window.print();}<\/script></body></html>`);
+        ventana.document.close();
+    }
+
+    // ENVIAR A LOGÍSTICA: proceso único (validar, guardar, generar,
+    // asociar, enviar, cambiar estado, bloquear y registrar historial).
+    function enviarLogistica() {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        const { errores } = validar(docActual, exp);
+
+        if (errores.length > 0) {
+            panel = "calidad";
+            repintarMain();
+            toast("Corrige los errores del Panel de Calidad antes de enviar.", "error");
+            return;
+        }
+
+        // 1) Guardar cambios.
+        exp.documento = clon(docActual);
+        // 2-4) Generar y asociar PDF / Word / Excel al Expediente.
+        RequerimientosDB.registrarDocumentos(exp);
+        exp.documentosAsociados = true;
+        // Conserva una copia inmutable de la versión enviada.
+        if (!Array.isArray(exp.versiones)) exp.versiones = [];
+        exp.versiones.push({ version: exp.version || 1, doc: clon(docActual), enviadoEn: Date.now() });
+        // 5-6) Enviar a Logística + cambiar estado.
+        exp.estado = "enviado";              // compatible con el Panel de Control
+        exp.docEstado = "enviado-logistica"; // ciclo de vida del Documento
+        exp.enviadoLogistica = true;
+        // 7) Bloquear edición.
+        exp.bloqueado = true;
+        // 8) Registrar historial.
+        RequerimientosDB.registrarHistorial(exp, "Enviado a Logística (PDF, Word y Excel asociados)", exp.version || 1);
+        RequerimientosDB.actualizarExpediente(exp);
+
+        modo = "edicion"; panel = null;
+        repintarMeta();
+        repintarSidebar();
+        repintarMain();
+        toast("Expediente enviado a Logística. Documento bloqueado.");
+    }
+
+    // Crear nueva versión editable tras un envío (nunca toca la enviada).
+    function nuevaVersion() {
+        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+        exp.version = (exp.version || 1) + 1;
+        exp.bloqueado = false;
+        exp.docEstado = "en-edicion";
+        docActual = clon(exp.documento || construirDoc(exp));
+        RequerimientosDB.registrarHistorial(exp, "Creó nueva versión para corrección", exp.version);
+        RequerimientosDB.actualizarExpediente(exp);
+        undoStack = []; redoStack = [];
+        repintarMeta();
+        repintarSidebar();
+        repintarMain();
+        toast(`Versión ${exp.version} creada. Ya puedes editar.`);
+    }
+
+    function sembrar() {
+        RequerimientosDB.sembrarEjemplos();
+        ReqWorkspace.render("documentos");
+        toast("Ejemplos cargados.");
+    }
+
+    function seleccionar(id) {
+        seleccionId = id;
+        const exp = RequerimientosDB.buscarExpediente(id);
+        docActual = exp.documento ? clon(exp.documento) : construirDoc(exp);
+        undoStack = []; redoStack = []; snapshotPendiente = null;
+        modo = "edicion"; panel = null;
+        repintarMeta();
+        repintarSidebar();
+        repintarMain();
+    }
+
+    /* ---------- Lectura de ediciones de la hoja hacia el modelo ---------- */
+
+    function leerEdicion(el) {
+        if (el.dataset.doc) {
+            docActual[el.dataset.doc] = el.innerText;
+        } else if (el.dataset.cell !== undefined && el.dataset.row !== undefined) {
+            const fila = docActual.filas[parseInt(el.dataset.row, 10)];
+            if (fila) fila[el.dataset.col] = el.innerText;
+        }
+    }
+
+    /* ---------- MONTAJE / WIRING (delegación en el contenedor) ---------- */
+
+    function montar(ws, params) {
+        const cont = ws.querySelector("#doc-container");
+        if (!cont) return;
+
+        // ----- CLICKS -----
+        cont.addEventListener("click", (e) => {
+
+            // Selección de expediente en el panel izquierdo.
+            const sel = e.target.closest("[data-doc-sel]");
+            if (sel) { seleccionar(sel.dataset.docSel); return; }
+
+            // Acciones de fila en la tabla.
+            const fila = e.target.closest("[data-doc-row]");
+            if (fila) {
+                capturar();
+                if (fila.dataset.docRow === "add") {
+                    docActual.filas.push({ um: "", cantidad: "", descripcion: "", fechaMax: "", observaciones: "" });
+                } else {
+                    docActual.filas.splice(parseInt(fila.dataset.row, 10), 1);
+                }
+                repintarMain();
+                return;
+            }
+
+            // Segmentos de formato (alineación / posición de logo).
+            const seg = e.target.closest('[data-doc-fmt="alinear"], [data-doc-fmt="logoPos"]');
+            if (seg) {
+                capturar();
+                docActual[seg.dataset.docFmt] = seg.dataset.val;
+                repintarMain();
+                return;
+            }
+
+            // Menú de descarga.
+            const item = e.target.closest("[data-doc-download]");
+            if (item) { descargar(item.dataset.docDownload); menuDescargaAbierto = false; cerrarMenu(); return; }
+
+            // Herramientas de la barra.
+            const tool = e.target.closest("[data-doc-tool]");
+            if (tool) {
+                const accion = tool.dataset.docTool;
+                if (accion === "undo") deshacer();
+                else if (accion === "redo") rehacer();
+                else if (accion === "guardar") guardarCambios(false);
+                else if (accion === "regenerar") regenerar();
+                else if (accion === "preview") alternarPreview();
+                else if (accion === "calidad") alternarPanel("calidad");
+                else if (accion === "historial") alternarPanel("historial");
+                else if (accion === "imprimir") imprimir();
+                else if (accion === "enviar") enviarLogistica();
+                else if (accion === "nueva-version") nuevaVersion();
+                else if (accion === "sembrar") sembrar();
+                else if (accion === "descargar") { menuDescargaAbierto = !menuDescargaAbierto; toggleMenu(); }
+                return;
+            }
+
+            // Clic fuera del menú de descarga -> cerrar.
+            if (!e.target.closest(".doc-menu-wrap")) { menuDescargaAbierto = false; cerrarMenu(); }
+        });
+
+        // ----- EDICIÓN EN LÍNEA + FILTROS + RANGOS/COLORES -----
+        cont.addEventListener("input", (e) => {
+            const editable = e.target.closest("[data-doc], [data-cell]");
+            if (editable) {
+                // Captura un único snapshot por sesión de edición de campo.
+                if (snapshotPendiente !== null) {
+                    undoStack.push(snapshotPendiente);
+                    if (undoStack.length > 60) undoStack.shift();
+                    redoStack = [];
+                    snapshotPendiente = null;
+                    actualizarUndoUI();
+                }
+                leerEdicion(editable);
+                return;
+            }
+
+            const filtro = e.target.closest("[data-doc-filter]");
+            if (filtro) { repintarSidebar(); return; }
+
+            const fmt = e.target.closest('[data-doc-fmt="margen"], [data-doc-fmt="colorPrimario"], [data-doc-fmt="colorTexto"]');
+            if (fmt) {
+                docActual[fmt.dataset.docFmt] = (fmt.type === "range") ? parseInt(fmt.value, 10) : fmt.value;
+                // Aplica el estilo sin re-render para conservar la edición.
+                aplicarEstiloHoja();
+                return;
+            }
+        });
+
+        // Captura del estado al ENTRAR a editar un campo (para deshacer).
+        cont.addEventListener("focusin", (e) => {
+            if (e.target.closest("[data-doc], [data-cell]")) {
+                snapshotPendiente = clon(docActual);
+            }
+        });
+
+        // ----- CAMBIOS (selects de filtro/fuente + carga de logo) -----
+        cont.addEventListener("change", (e) => {
+            const filtro = e.target.closest("[data-doc-filter]");
+            if (filtro) { repintarSidebar(); return; }
+
+            const fuente = e.target.closest('[data-doc-fmt="fuente"]');
+            if (fuente) { capturar(); docActual.fuente = fuente.value; aplicarEstiloHoja(); return; }
+
+            const logo = e.target.closest('[data-doc-fmt="logoUpload"]');
+            if (logo && logo.files && logo.files[0]) {
+                const lector = new FileReader();
+                lector.onload = () => { capturar(); docActual.logoUrl = lector.result; repintarMain(); };
+                lector.readAsDataURL(logo.files[0]);
+            }
+        });
+
+        actualizarUndoUI();
+    }
+
+    // Aplica color/tipografía/márgenes directamente sobre la hoja
+    // (evita re-render para no interrumpir la edición de texto).
+    function aplicarEstiloHoja() {
+        const hoja = root() && root().querySelector("#doc-sheet");
+        if (!hoja) return;
+        hoja.style.setProperty("--doc-primary", docActual.colorPrimario);
+        hoja.style.setProperty("--doc-text", docActual.colorTexto);
+        hoja.style.fontFamily = `'${docActual.fuente}',Arial,sans-serif`;
+        hoja.style.padding = `${docActual.margen}px`;
+    }
+
+    function toggleMenu() {
+        const m = root() && root().querySelector("#doc-menu-descarga");
+        if (m) m.classList.toggle("is-open", menuDescargaAbierto);
+    }
+    function cerrarMenu() {
+        const m = root() && root().querySelector("#doc-menu-descarga");
+        if (m) m.classList.remove("is-open");
+    }
+
+    return { render, montar };
+})();
+
 /* --------------------------------------------------------
    REQ WORKSPACE — dispatcher del contenedor #req-workspace
    --------------------------------------------------------
    Decide qué submódulo se pinta según la clave de la pestaña.
-   "panel-control" y "nuevo-requerimiento" están desarrollados;
-   el resto muestran un marcador neutro hasta su fase.
+   "panel-control", "nuevo-requerimiento" y "documentos" están
+   desarrollados; el resto muestran un marcador neutro hasta su fase.
    Centraliza también la navegación interna programática para
    reutilizar la misma navegación que el usuario (sin recargas).
    -------------------------------------------------------- */
@@ -2586,6 +3700,9 @@ const ReqWorkspace = (function () {
         } else if (claveTab === "nuevo-requerimiento") {
             ws.innerHTML = NuevoRequerimiento.render();
             NuevoRequerimiento.montar(ws);
+        } else if (claveTab === "documentos") {
+            ws.innerHTML = Documentos.render(params);
+            Documentos.montar(ws, params);
         } else {
             ws.innerHTML = placeholder(claveTab, params);
         }
