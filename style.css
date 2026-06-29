@@ -2957,3 +2957,647 @@ body::-webkit-scrollbar{
         flex-basis: 100%;
     }
 }
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "NUEVO REQUERIMIENTO"
+   ----------------------------------------------------------
+   Vive dentro de #req-workspace y reutiliza las variables del
+   Dashboard (--dash-*) y los tokens de estado/prioridad del
+   Panel. Todas las clases llevan prefijo nr-.
+   ========================================================== */
+
+.nr{
+    --nr-radius: 14px;
+    --nr-focus: var(--dash-accent);
+
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+
+    animation: nr-fade 0.25s ease;
+}
+
+@keyframes nr-fade{
+    from{ opacity: 0; transform: translateY(6px); }
+    to{ opacity: 1; transform: translateY(0); }
+}
+
+/* --- Cabecera --- */
+
+.nr-head{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.nr-title{
+    color: var(--dash-text);
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+}
+
+.nr-sub{
+    color: var(--dash-text-soft);
+    font-size: 13.5px;
+    margin-top: 4px;
+    max-width: 640px;
+}
+
+/* --- Mensajes globales --- */
+
+.nr-alert{
+    padding: 14px 16px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    border: 1px solid var(--dash-border);
+}
+
+.nr-alert ul{
+    margin: 6px 0 0 18px;
+}
+
+.nr-alert.is-error{
+    background: rgba(197,70,59,.06);
+    border-color: rgba(197,70,59,.35);
+    color: #8f342b;
+}
+
+.nr-alert.is-ok{
+    background: rgba(46,158,91,.08);
+    border-color: rgba(46,158,91,.35);
+    color: #1f6f41;
+}
+
+/* --- Tarjetas --- */
+
+.nr-card{
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--nr-radius);
+    padding: 18px 18px 20px;
+}
+
+.nr-card-head{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.nr-step{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    width: 24px;
+    height: 24px;
+
+    background: var(--dash-accent);
+    color: #fff;
+
+    font-size: 13px;
+    font-weight: 700;
+
+    border-radius: 50%;
+}
+
+.nr-card-title{
+    color: var(--dash-text);
+    font-size: 15.5px;
+    font-weight: 700;
+
+    flex: 1;
+}
+
+/* --- Rejilla de campos --- */
+
+.nr-grid{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px 16px;
+}
+
+.nr-field{
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.nr-label{
+    color: var(--dash-text-soft);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.nr-req{
+    color: var(--pc-rechazado, #C5463B);
+}
+
+.nr-input{
+    width: 100%;
+
+    background: var(--dash-bg);
+    color: var(--dash-text);
+
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+
+    padding: 10px 12px;
+
+    font-size: 14px;
+    font-family: inherit;
+
+    outline: none;
+
+    transition: border-color 0.18s, box-shadow 0.18s;
+}
+
+.nr-input:focus{
+    border-color: var(--nr-focus);
+    box-shadow: 0 0 0 3px rgba(182, 138, 46, 0.15);
+}
+
+select.nr-input{
+    cursor: pointer;
+}
+
+.nr-textarea{
+    resize: vertical;
+    min-height: 90px;
+    line-height: 1.5;
+}
+
+/* Estado de error en un campo. */
+.nr-field.nr-invalid .nr-input{
+    border-color: var(--pc-rechazado, #C5463B);
+    box-shadow: 0 0 0 3px rgba(197, 70, 59, 0.12);
+}
+
+.nr-error{
+    color: var(--pc-rechazado, #C5463B);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* --- Autocompletado (lista flotante) --- */
+
+.nr-suggest{
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 40;
+
+    list-style: none;
+    margin-top: 4px;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+
+    box-shadow: 0 12px 28px rgba(38, 36, 30, 0.14);
+
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.nr-suggest-item{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+
+    padding: 9px 12px;
+
+    font-size: 13.5px;
+    color: var(--dash-text);
+
+    cursor: pointer;
+}
+
+.nr-suggest-item:hover{
+    background: var(--dash-hover);
+}
+
+.nr-suggest-meta{
+    color: var(--dash-text-soft);
+    font-size: 12px;
+    font-weight: 600;
+
+    background: var(--dash-sidebar);
+    border-radius: 6px;
+    padding: 1px 7px;
+}
+
+/* --- Tabla de materiales --- */
+
+.nr-table-wrap{
+    overflow-x: auto;
+    border: 1px solid var(--dash-border);
+    border-radius: var(--nr-radius);
+}
+
+.nr-table{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    min-width: 720px;
+}
+
+.nr-table thead th{
+    color: var(--dash-text-soft);
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    text-align: left;
+
+    padding: 11px 12px;
+    background: var(--dash-sidebar);
+    border-bottom: 1px solid var(--dash-border);
+    white-space: nowrap;
+}
+
+.nr-th-item{ width: 56px; }
+.nr-th-um{ width: 90px; }
+.nr-th-cant{ width: 110px; }
+.nr-th-acc{ width: 120px; }
+
+.nr-table tbody td{
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--dash-border);
+    vertical-align: middle;
+}
+
+.nr-table tbody tr:last-child td{
+    border-bottom: none;
+}
+
+.nr-col-item{
+    text-align: center;
+    font-weight: 700;
+    color: var(--dash-accent);
+}
+
+/* Inputs dentro de la tabla: más compactos y sin doble borde visual. */
+.nr-table .nr-input{
+    padding: 8px 10px;
+    border-radius: 8px;
+}
+
+.nr-cell-ac{
+    position: relative;
+}
+
+.nr-row-actions{
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.nr-row-actions button{
+    width: 26px;
+    height: 26px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    background: transparent;
+    border: 1px solid var(--dash-border);
+    border-radius: 7px;
+
+    color: var(--dash-text-soft);
+    font-size: 12px;
+
+    cursor: pointer;
+
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.nr-row-actions button:hover{
+    background: var(--dash-hover);
+    color: var(--dash-text);
+    border-color: var(--dash-accent);
+}
+
+.nr-row-actions button[data-row="del"]:hover{
+    color: var(--pc-rechazado, #C5463B);
+    border-color: var(--pc-rechazado, #C5463B);
+}
+
+/* --- Ortografía (sugerencias no destructivas) --- */
+
+.nr-spell{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+
+    margin-top: 10px;
+}
+
+.nr-spell-label{
+    color: var(--dash-text-soft);
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.nr-spell-chip{
+    background: rgba(201,138,30,.12);
+    border: 1px solid rgba(201,138,30,.3);
+    border-radius: 20px;
+
+    color: #8a5e12;
+    font-size: 12.5px;
+
+    padding: 4px 10px;
+
+    cursor: pointer;
+
+    transition: background 0.15s;
+}
+
+.nr-spell-chip:hover{
+    background: rgba(201,138,30,.2);
+}
+
+/* --- Adjuntos --- */
+
+.nr-drop{
+    border: 1.5px dashed var(--dash-border);
+    border-radius: var(--nr-radius);
+
+    padding: 24px;
+
+    text-align: center;
+
+    cursor: pointer;
+
+    transition: border-color 0.18s, background 0.18s;
+}
+
+.nr-drop:hover,
+.nr-drop:focus,
+.nr-drop.is-over{
+    border-color: var(--dash-accent);
+    background: var(--dash-hover);
+    outline: none;
+}
+
+.nr-drop-inner{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+
+    color: var(--dash-text-soft);
+    font-size: 13.5px;
+}
+
+.nr-drop-icon{
+    color: var(--dash-accent);
+}
+
+.nr-drop-icon svg{
+    width: 28px;
+    height: 28px;
+}
+
+.nr-files{
+    list-style: none;
+    margin-top: 12px;
+
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.nr-file{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    background: var(--dash-sidebar);
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+
+    padding: 9px 12px;
+
+    font-size: 13.5px;
+}
+
+.nr-file-name{
+    flex: 1;
+    color: var(--dash-text);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nr-file-size{
+    color: var(--dash-text-soft);
+    font-size: 12px;
+}
+
+.nr-file-del{
+    background: transparent;
+    border: none;
+    color: var(--dash-text-soft);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+
+.nr-file-del:hover{
+    color: var(--pc-rechazado, #C5463B);
+    background: rgba(197,70,59,.1);
+}
+
+/* --- Botones --- */
+
+.nr-actions{
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+
+    padding-top: 4px;
+}
+
+.nr-btn{
+    border: 1px solid transparent;
+    border-radius: 10px;
+
+    padding: 11px 18px;
+
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+
+    cursor: pointer;
+
+    transition: background 0.18s, border-color 0.18s, transform 0.15s, opacity 0.18s;
+}
+
+.nr-btn:hover{
+    transform: translateY(-1px);
+}
+
+.nr-btn-primary{
+    background: var(--dash-accent);
+    color: #fff;
+}
+
+.nr-btn-primary:hover{
+    background: #a87c25;
+}
+
+.nr-btn-soft{
+    background: var(--dash-bg);
+    color: var(--dash-text);
+    border-color: var(--dash-border);
+}
+
+.nr-btn-soft:hover{
+    background: var(--dash-hover);
+    border-color: var(--dash-accent);
+}
+
+.nr-btn-ghost{
+    background: transparent;
+    color: var(--dash-text-soft);
+    border-color: var(--dash-border);
+}
+
+.nr-btn-ghost:hover{
+    background: var(--dash-hover);
+    color: var(--dash-text);
+}
+
+/* Botón pequeño para añadir fila (en cabecera de tarjeta). */
+.nr-card-head .nr-btn-soft{
+    padding: 7px 12px;
+    font-size: 13px;
+}
+
+.nr-link{
+    background: none;
+    border: none;
+    color: var(--dash-accent);
+    font-weight: 700;
+    font-family: inherit;
+    font-size: inherit;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+}
+
+/* --- Pantalla de éxito --- */
+
+.nr-success{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+
+    max-width: 620px;
+    margin: 10px auto;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--nr-radius);
+
+    padding: 36px 28px;
+
+    animation: nr-fade 0.3s ease;
+}
+
+.nr-success-icon{
+    color: var(--pc-aprobado, #2E9E5B);
+}
+
+.nr-success-icon svg{
+    width: 52px;
+    height: 52px;
+}
+
+.nr-success-title{
+    color: var(--dash-text);
+    font-size: 21px;
+    font-weight: 700;
+}
+
+.nr-success-text{
+    color: var(--dash-text-soft);
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.nr-success-sub{
+    color: var(--dash-text-soft);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+
+    margin-top: 12px;
+}
+
+.nr-doc-buttons{
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.nr-success-actions{
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+
+    margin-top: 18px;
+}
+
+/* ==========================================================
+   RESPONSIVE — NUEVO REQUERIMIENTO
+   ----------------------------------------------------------
+   No altera la experiencia móvil global del Dashboard; solo
+   adapta la rejilla y las acciones de este formulario.
+   ========================================================== */
+
+@media (max-width: 992px){
+
+    .nr-grid{
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px){
+
+    .nr-grid{
+        grid-template-columns: 1fr;
+    }
+
+    .nr-actions{
+        justify-content: stretch;
+    }
+
+    .nr-actions .nr-btn{
+        flex: 1 1 100%;
+    }
+
+    .nr-card-head{
+        flex-wrap: wrap;
+    }
+}

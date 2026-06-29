@@ -817,14 +817,47 @@ const ExpedienteDigital = (function () {
 
     // --- Consultas (solo lectura) ---
 
-    // Devuelve una copia de los expedientes con su fecha calculada.
+    // Normaliza un expediente creado desde "Nuevo Requerimiento" a la
+    // misma forma que entrega esta capa (para que el Panel lo lea igual).
+    function normalizarCreado(e) {
+        const hoy = hoyCero();
+
+        const limite = e.fechaMaxima ? new Date(e.fechaMaxima) : hoy;
+        limite.setHours(0, 0, 0, 0);
+
+        const creado = e.fecha ? new Date(e.fecha) : new Date(e.creadoEn || Date.now());
+
+        return {
+            codigo: e.codigo,
+            obra: e.obra,
+            prioridad: e.prioridad || "Media",
+            estado: e.estado,
+            responsable: e.requeridoPor || "—",
+            fechaLimite: limite,
+            fechaCreado: creado,
+            diasParaVencer: Math.round((limite - hoy) / 86400000)
+        };
+    }
+
+    // Lee los expedientes creados desde el repositorio (si existe).
+    function expedientesCreados() {
+        try {
+            return RequerimientosDB.listarExpedientes().map(normalizarCreado);
+        } catch (error) {
+            return [];
+        }
+    }
+
+    // Devuelve los expedientes (creados + muestra) con fecha calculada.
     function listar() {
-        return FUENTE.map((e) => ({
+        const muestra = FUENTE.map((e) => ({
             ...e,
             fechaLimite: fechaDesdeOffset(e.limite),
             fechaCreado: fechaDesdeOffset(e.creado),
             diasParaVencer: diasRestantes(e.limite)
         }));
+
+        return expedientesCreados().concat(muestra);
     }
 
     function buscarPorCodigo(codigo) {
@@ -904,12 +937,33 @@ const ExpedienteDigital = (function () {
         return alertas;
     }
 
+    // Convierte una marca de tiempo (ms) en "horas transcurridas".
+    function horasDesde(en) {
+        return Math.max(0, Math.round((Date.now() - en) / 3600000));
+    }
+
     function obtenerActividad() {
-        return ACTIVIDAD.slice();
+        let creada = [];
+        try {
+            creada = RequerimientosDB.listarActividad().map((a) => ({
+                tipo: a.tipo, texto: a.texto, codigo: a.codigo, hace: horasDesde(a.en)
+            }));
+        } catch (error) {
+            creada = [];
+        }
+        return creada.concat(ACTIVIDAD).slice(0, 8);
     }
 
     function obtenerNotificaciones() {
-        return NOTIFICACIONES.slice();
+        let creadas = [];
+        try {
+            creadas = RequerimientosDB.listarNotificaciones().map((n) => ({
+                texto: n.texto, codigo: n.codigo, hace: horasDesde(n.en)
+            }));
+        } catch (error) {
+            creadas = [];
+        }
+        return creadas.concat(NOTIFICACIONES).slice(0, 8);
     }
 
     return {
@@ -1267,12 +1321,1220 @@ const PanelControl = {
     }
 };
 
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "NUEVO REQUERIMIENTO"
+   ----------------------------------------------------------
+   Corazón del ERP: aquí nace TODA la información. El residente
+   escribe una sola vez; el sistema alimenta automáticamente el
+   resto del ecosistema (Panel, Bandeja, Documentos, etc.).
+
+   Se monta dentro de #req-workspace reutilizando la identidad
+   visual del Dashboard. Capas independientes:
+
+     RequerimientosDB   -> persistencia + aprendizaje inteligente
+     Ortografia         -> sugerencias no destructivas
+     DocumentGenerator  -> PDF / Word / Excel del Expediente
+     NuevoRequerimiento -> formulario (4 tarjetas) y comportamiento
+
+   PERSISTENCIA: hoy se usa localStorage como repositorio local.
+   La API de RequerimientosDB está aislada para sustituirse por
+   Supabase/PostgreSQL sin tocar la interfaz (mismo contrato).
+   ========================================================== */
+
+/* --------------------------------------------------------
+   RequerimientosDB — repositorio + memoria de aprendizaje
+   -------------------------------------------------------- */
+
+const RequerimientosDB = (function () {
+
+    const K = {
+        expedientes:    "zovrake_req_expedientes",
+        memoria:        "zovrake_req_memoria",
+        actividad:      "zovrake_req_actividad",
+        notificaciones: "zovrake_req_notificaciones",
+        documentos:     "zovrake_req_documentos",
+        obras:          "zovrake_obras"
+    };
+
+    // Catálogo inicial de obras (proviene de "Configuración General";
+    // ese módulo lo administrará más adelante). Aporta valores por
+    // defecto para el autocompletado antes de que exista historial.
+    const OBRAS_SEED = [
+        { nombre: "Torre Norte",      lugarEntrega: "Almacén Central — Torre Norte",   requeridoPor: "C. Rivas", cargoRequerido: "Residente de Obra", recibidoPor: "J. Quispe", cargoRecibido: "Almacenero" },
+        { nombre: "Planta Sur",       lugarEntrega: "Almacén de Obra — Planta Sur",    requeridoPor: "M. Díaz",  cargoRequerido: "Residente de Obra", recibidoPor: "R. Loayza", cargoRecibido: "Logística" },
+        { nombre: "Puente Río",       lugarEntrega: "Frente de trabajo — Puente Río",  requeridoPor: "L. Pérez", cargoRequerido: "Ing. de Campo",    recibidoPor: "S. Núñez",  cargoRecibido: "Almacenero" },
+        { nombre: "Edificio Central", lugarEntrega: "Patio de maniobras — E. Central", requeridoPor: "C. Rivas", cargoRequerido: "Residente de Obra", recibidoPor: "J. Quispe", cargoRecibido: "Almacenero" },
+        { nombre: "Vía Expressa",     lugarEntrega: "Campamento — Vía Expressa",       requeridoPor: "A. Soto",  cargoRequerido: "Ing. Residente",   recibidoPor: "R. Loayza", cargoRecibido: "Logística" },
+        { nombre: "Almacén 4",        lugarEntrega: "Almacén 4",                       requeridoPor: "A. Soto",  cargoRequerido: "Supervisor",       recibidoPor: "S. Núñez",  cargoRecibido: "Almacenero" }
+    ];
+
+    // --- Acceso seguro a localStorage (degrada sin romper) ---
+
+    function leer(clave, porDefecto) {
+        try {
+            const valor = localStorage.getItem(clave);
+            return valor ? JSON.parse(valor) : porDefecto;
+        } catch (error) {
+            return porDefecto;
+        }
+    }
+
+    function escribir(clave, valor) {
+        try {
+            localStorage.setItem(clave, JSON.stringify(valor));
+        } catch (error) {
+            console.warn("[Zovrake] No se pudo persistir en localStorage:", error);
+        }
+    }
+
+    function uid() {
+        return "rq-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    }
+
+    // --- Obras (configuración) ---
+
+    function obtenerObras() {
+        const obras = leer(K.obras, null);
+        if (!obras) {
+            escribir(K.obras, OBRAS_SEED);
+            return OBRAS_SEED.slice();
+        }
+        return obras;
+    }
+
+    function configObra(nombre) {
+        return obtenerObras().find((o) => o.nombre === nombre) || null;
+    }
+
+    // --- Memoria de aprendizaje ---
+    //
+    // Estructura:
+    //   { obras: { [obra]: { requeridoPor:{val:count}, cargoRequerido,
+    //     recibidoPor, cargoRecibido, lugarEntrega, partidas,
+    //     materiales:{ [descLower]: {descripcion, um, count} } } },
+    //     partidasGlobal:{val:count}, materialesGlobal:{...} }
+
+    function memoria() {
+        return leer(K.memoria, { obras: {}, partidasGlobal: {}, materialesGlobal: {} });
+    }
+
+    function asegurarObraMem(mem, obra) {
+        if (!mem.obras[obra]) {
+            mem.obras[obra] = {
+                requeridoPor: {}, cargoRequerido: {}, recibidoPor: {},
+                cargoRecibido: {}, lugarEntrega: {}, partidas: {}, materiales: {}
+            };
+        }
+        return mem.obras[obra];
+    }
+
+    function sumar(mapa, valor) {
+        const v = (valor || "").trim();
+        if (!v) return;
+        mapa[v] = (mapa[v] || 0) + 1;
+    }
+
+    // Aprende a partir de un Expediente CONFIRMADO (nunca de borradores).
+    function aprenderDeExpediente(exp) {
+        const mem = memoria();
+        const obraMem = asegurarObraMem(mem, exp.obra);
+
+        sumar(obraMem.requeridoPor, exp.requeridoPor);
+        sumar(obraMem.cargoRequerido, exp.cargoRequerido);
+        sumar(obraMem.recibidoPor, exp.recibidoPor);
+        sumar(obraMem.cargoRecibido, exp.cargoRecibido);
+        sumar(obraMem.lugarEntrega, exp.lugarEntrega);
+        sumar(obraMem.partidas, exp.partida);
+        sumar(mem.partidasGlobal, exp.partida);
+
+        (exp.materiales || []).forEach((m) => {
+            const desc = (m.descripcion || "").trim();
+            if (!desc) return;
+            const clave = desc.toLowerCase();
+
+            const previo = obraMem.materiales[clave] || { descripcion: desc, um: "", count: 0 };
+            previo.descripcion = desc;
+            if (m.um) previo.um = m.um;
+            previo.count += 1;
+            obraMem.materiales[clave] = previo;
+
+            const prevG = mem.materialesGlobal[clave] || { descripcion: desc, um: "", count: 0 };
+            prevG.descripcion = desc;
+            if (m.um) prevG.um = m.um;
+            prevG.count += 1;
+            mem.materialesGlobal[clave] = prevG;
+        });
+
+        escribir(K.memoria, mem);
+    }
+
+    // Ordena un mapa {valor:count} de mayor a menor frecuencia.
+    function ranking(mapa) {
+        return Object.keys(mapa || {}).sort((a, b) => mapa[b] - mapa[a]);
+    }
+
+    function filtrar(lista, texto, limite = 6) {
+        const t = (texto || "").trim().toLowerCase();
+        const base = t
+            ? lista.filter((v) => v.toLowerCase().includes(t))
+            : lista;
+        return base.slice(0, limite);
+    }
+
+    // Valores por defecto + aprendidos para autocompletar una obra.
+    function datosObra(nombre) {
+        const cfg = configObra(nombre) || {};
+        const mem = memoria().obras[nombre] || {};
+
+        const top = (mapa, fallback) => {
+            const r = ranking(mapa);
+            return r.length ? r[0] : (fallback || "");
+        };
+
+        return {
+            lugarEntrega:   top(mem.lugarEntrega, cfg.lugarEntrega),
+            requeridoPor:   top(mem.requeridoPor, cfg.requeridoPor),
+            cargoRequerido: top(mem.cargoRequerido, cfg.cargoRequerido),
+            recibidoPor:    top(mem.recibidoPor, cfg.recibidoPor),
+            cargoRecibido:  top(mem.cargoRecibido, cfg.cargoRecibido)
+        };
+    }
+
+    // Sugerencias por campo (combina aprendido + valor de configuración).
+    function sugerirCampo(obra, campo, texto) {
+        const mem = memoria().obras[obra] || {};
+        const cfg = configObra(obra) || {};
+
+        const lista = ranking(mem[campo] || {});
+        if (cfg[campo] && !lista.includes(cfg[campo])) lista.push(cfg[campo]);
+
+        return filtrar(lista, texto);
+    }
+
+    function sugerirPartidas(obra, texto) {
+        const mem = memoria();
+        const porObra = ranking((mem.obras[obra] || {}).partidas || {});
+        const globales = ranking(mem.partidasGlobal).filter((p) => !porObra.includes(p));
+        return filtrar(porObra.concat(globales), texto);
+    }
+
+    // Materiales: devuelve [{descripcion, um}] ordenados por frecuencia.
+    function sugerirMateriales(obra, texto) {
+        const mem = memoria();
+        const local = mem.obras[obra] ? mem.obras[obra].materiales : {};
+        const fusion = {};
+
+        [mem.materialesGlobal, local].forEach((fuente) => {
+            Object.keys(fuente || {}).forEach((clave) => {
+                const m = fuente[clave];
+                const previo = fusion[clave] || { descripcion: m.descripcion, um: m.um, count: 0 };
+                previo.count += m.count;
+                if (m.um) previo.um = m.um;
+                fusion[clave] = previo;
+            });
+        });
+
+        const t = (texto || "").trim().toLowerCase();
+        return Object.values(fusion)
+            .filter((m) => !t || m.descripcion.toLowerCase().includes(t))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 7);
+    }
+
+    // U.M. aprendida para un material concreto (si existe).
+    function umDeMaterial(obra, descripcion) {
+        const clave = (descripcion || "").trim().toLowerCase();
+        if (!clave) return "";
+        const mem = memoria();
+        const local = (mem.obras[obra] || {}).materiales || {};
+        return (local[clave] && local[clave].um) ||
+               (mem.materialesGlobal[clave] && mem.materialesGlobal[clave].um) || "";
+    }
+
+    // --- Expedientes ---
+
+    function listarExpedientes() {
+        return leer(K.expedientes, []);
+    }
+
+    function guardarColeccion(lista) {
+        escribir(K.expedientes, lista);
+    }
+
+    // Próximo código secuencial para un prefijo dado (REQ / BORR),
+    // considerando la numeración ya existente.
+    function siguienteCodigo(prefijo, base) {
+        const usados = listarExpedientes()
+            .map((e) => e.codigo)
+            .filter((c) => c && c.indexOf(prefijo + "-") === 0)
+            .map((c) => parseInt(c.split("-")[1], 10))
+            .filter((n) => !isNaN(n));
+
+        const max = usados.length ? Math.max(...usados) : (base || 0);
+        return `${prefijo}-${String(max + 1).padStart(4, "0")}`;
+    }
+
+    // Deriva la prioridad a partir de la urgencia del vencimiento.
+    function prioridadPorVencimiento(fechaMaximaISO) {
+        if (!fechaMaximaISO) return "Media";
+        const limite = new Date(fechaMaximaISO);
+        limite.setHours(0, 0, 0, 0);
+        const hoy = new Date();
+        hoy.setHours(0, 0, 0, 0);
+        const dias = Math.round((limite - hoy) / 86400000);
+
+        if (dias <= 2) return "Urgente";
+        if (dias <= 5) return "Alta";
+        if (dias <= 10) return "Media";
+        return "Baja";
+    }
+
+    function upsert(exp) {
+        const lista = listarExpedientes();
+        const idx = lista.findIndex((e) => e.id === exp.id);
+        if (idx >= 0) lista[idx] = exp; else lista.unshift(exp);
+        guardarColeccion(lista);
+        return exp;
+    }
+
+    // Guarda un BORRADOR (estado borrador). NO genera documentos ni
+    // alimenta el aprendizaje. Editable luego desde la Bandeja.
+    function guardarBorrador(datos) {
+        const exp = {
+            ...datos,
+            id: datos.id || uid(),
+            codigo: datos.codigo || siguienteCodigo("BORR", 0),
+            estado: "borrador",
+            prioridad: prioridadPorVencimiento(datos.fechaMaxima),
+            creadoEn: datos.creadoEn || Date.now(),
+            actualizadoEn: Date.now()
+        };
+
+        upsert(exp);
+        registrarActividad({ tipo: "creado", texto: "Borrador guardado", codigo: exp.codigo });
+        return exp;
+    }
+
+    // Genera el EXPEDIENTE DIGITAL (confirmado). Estado "enviado":
+    // emitido al flujo interno del módulo (aún NO entregado a
+    // Logística, que es un traspaso posterior entre módulos). Alimenta
+    // el aprendizaje y actualiza actividad / notificaciones / documentos.
+    function generarExpediente(datos) {
+        const codigo = (datos.codigo && datos.codigo.indexOf("REQ-") === 0)
+            ? datos.codigo
+            : siguienteCodigo("REQ", 12);
+
+        const exp = {
+            ...datos,
+            id: datos.id || uid(),
+            codigo,
+            estado: "enviado",
+            prioridad: prioridadPorVencimiento(datos.fechaMaxima),
+            creadoEn: datos.creadoEn || Date.now(),
+            actualizadoEn: Date.now(),
+            documentos: ["pdf", "word", "excel"]
+        };
+
+        upsert(exp);
+        aprenderDeExpediente(exp);
+
+        registrarActividad({ tipo: "enviado", texto: "Expediente Digital generado", codigo: exp.codigo });
+        registrarNotificacion({ texto: `Nuevo expediente ${exp.codigo} · ${exp.obra}`, codigo: exp.codigo });
+        registrarDocumentos(exp);
+
+        return exp;
+    }
+
+    // --- Actividad / Notificaciones / Documentos (alimentan el Panel) ---
+
+    function recortar(lista, max) {
+        return lista.slice(0, max);
+    }
+
+    function registrarActividad(evento) {
+        const lista = leer(K.actividad, []);
+        lista.unshift({ ...evento, en: Date.now() });
+        escribir(K.actividad, recortar(lista, 30));
+    }
+
+    function listarActividad() {
+        return leer(K.actividad, []);
+    }
+
+    function registrarNotificacion(notif) {
+        const lista = leer(K.notificaciones, []);
+        lista.unshift({ ...notif, en: Date.now() });
+        escribir(K.notificaciones, recortar(lista, 30));
+    }
+
+    function listarNotificaciones() {
+        return leer(K.notificaciones, []);
+    }
+
+    function registrarDocumentos(exp) {
+        const lista = leer(K.documentos, []);
+        ["pdf", "word", "excel"].forEach((tipo) => {
+            lista.unshift({
+                codigo: exp.codigo,
+                obra: exp.obra,
+                tipo,
+                nombre: `${exp.codigo}.${tipo === "word" ? "doc" : (tipo === "excel" ? "xls" : "pdf")}`,
+                generadoEn: Date.now()
+            });
+        });
+        escribir(K.documentos, recortar(lista, 120));
+    }
+
+    function listarDocumentos() {
+        return leer(K.documentos, []);
+    }
+
+    return {
+        obtenerObras, configObra, datosObra,
+        sugerirCampo, sugerirPartidas, sugerirMateriales, umDeMaterial,
+        listarExpedientes, guardarBorrador, generarExpediente,
+        listarActividad, listarNotificaciones, listarDocumentos
+    };
+})();
+
+/* --------------------------------------------------------
+   Ortografia — sugerencias no destructivas (no auto-corrige)
+   --------------------------------------------------------
+   Diccionario ligero de errores frecuentes (genéricos + dominio
+   construcción). Detecta y SUGIERE; nunca modifica el texto solo.
+   -------------------------------------------------------- */
+
+const Ortografia = (function () {
+
+    const CORRECCIONES = {
+        "cemnto": "cemento", "cemeto": "cemento",
+        "conreto": "concreto", "conccreto": "concreto",
+        "acerro": "acero", "aceo": "acero", "fiero": "fierro",
+        "tuberia": "tubería", "tubria": "tubería",
+        "valbula": "válvula", "valvula": "válvula",
+        "albanil": "albañil", "ladrillu": "ladrillo", "ladrilo": "ladrillo",
+        "agreado": "agregado", "agregdo": "agregado",
+        "encofrao": "encofrado", "encofrdo": "encofrado",
+        "varrilla": "varilla", "varila": "varilla", "clabos": "clavos",
+        "alambr": "alambre", "pintua": "pintura",
+        "instalacion": "instalación", "electrico": "eléctrico",
+        "electrica": "eléctrica", "hidraulico": "hidráulico",
+        "metalico": "metálico", "maquina": "máquina",
+        "unidaded": "unidades", "cantidd": "cantidad",
+        "observacion": "observación", "requerimineto": "requerimiento",
+        "requeriminto": "requerimiento", "materil": "material",
+        "matrial": "material", "obsevaciones": "observaciones"
+    };
+
+    // Devuelve [{palabra, sugerencia}] con los errores encontrados.
+    function revisar(texto) {
+        if (!texto) return [];
+
+        const vistos = new Set();
+        const hallazgos = [];
+
+        (texto.match(/[A-Za-zÁÉÍÓÚáéíóúÑñ]+/g) || []).forEach((palabra) => {
+            const clave = palabra.toLowerCase();
+            const sugerencia = CORRECCIONES[clave];
+            if (sugerencia && sugerencia.toLowerCase() !== clave && !vistos.has(clave)) {
+                vistos.add(clave);
+                hallazgos.push({ palabra, sugerencia });
+            }
+        });
+
+        return hallazgos;
+    }
+
+    return { revisar };
+})();
+
+/* --------------------------------------------------------
+   DocumentGenerator — Expediente en PDF / Word / Excel
+   --------------------------------------------------------
+   Word (.doc) y Excel (.xls) se generan de forma nativa con
+   Blobs (sin dependencias). El PDF usa jsPDF cargado bajo demanda
+   desde CDN; si no está disponible, recurre a impresión del
+   navegador. No modifica el index.html.
+   -------------------------------------------------------- */
+
+const DocumentGenerator = (function () {
+
+    let promesaJsPDF = null;
+
+    function cargarJsPDF() {
+        if (window.jspdf && window.jspdf.jsPDF) {
+            return Promise.resolve(window.jspdf.jsPDF);
+        }
+        if (promesaJsPDF) return promesaJsPDF;
+
+        promesaJsPDF = new Promise((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+            s.onload = () => resolve(window.jspdf && window.jspdf.jsPDF);
+            s.onerror = () => reject(new Error("No se pudo cargar jsPDF"));
+            document.head.appendChild(s);
+        });
+        return promesaJsPDF;
+    }
+
+    function descargar(blob, nombre) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = nombre;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+
+    function esc(t) {
+        return PanelUtils.escapar(t == null ? "" : t);
+    }
+
+    function fila(exp) {
+        return [
+            ["Código", exp.codigo],
+            ["Obra", exp.obra],
+            ["Partida", exp.partida],
+            ["Requerido por", `${exp.requeridoPor} (${exp.cargoRequerido || "—"})`],
+            ["Recibido por", `${exp.recibidoPor} (${exp.cargoRecibido || "—"})`],
+            ["Lugar de entrega", exp.lugarEntrega],
+            ["Fecha", exp.fecha],
+            ["Fecha máxima de ingreso", exp.fechaMaxima]
+        ];
+    }
+
+    // Tabla HTML de materiales reutilizada por Word y Excel.
+    function tablaMaterialesHTML() {
+        return (exp) => `
+            <table border="1" cellspacing="0" cellpadding="6">
+                <thead>
+                    <tr>
+                        <th>Ítem</th><th>Descripción de Material</th><th>U.M.</th>
+                        <th>Cantidad</th><th>Observaciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${exp.materiales.map((m, i) => `
+                        <tr>
+                            <td>${i + 1}</td>
+                            <td>${esc(m.descripcion)}</td>
+                            <td>${esc(m.um)}</td>
+                            <td>${esc(m.cantidad)}</td>
+                            <td>${esc(m.observaciones)}</td>
+                        </tr>`).join("")}
+                </tbody>
+            </table>`;
+    }
+
+    function cabeceraHTML(exp) {
+        return fila(exp).map(([k, v]) =>
+            `<tr><td><strong>${esc(k)}</strong></td><td>${esc(v)}</td></tr>`
+        ).join("");
+    }
+
+    function descargarWord(exp) {
+        const html = `
+            <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+            <head><meta charset="utf-8"><title>${esc(exp.codigo)}</title></head>
+            <body style="font-family:Arial,sans-serif;color:#222">
+                <h1 style="color:#B68A2E">ZOVRAKE — Expediente Digital</h1>
+                <h2>${esc(exp.codigo)}</h2>
+                <table border="0" cellpadding="4">${cabeceraHTML(exp)}</table>
+                <h3>Detalle del Requerimiento</h3>
+                ${tablaMaterialesHTML()(exp)}
+                <h3>Observaciones Generales</h3>
+                <p>${esc(exp.observacionesGenerales) || "—"}</p>
+            </body></html>`;
+
+        descargar(new Blob([html], { type: "application/msword" }), `${exp.codigo}.doc`);
+    }
+
+    function descargarExcel(exp) {
+        const html = `
+            <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+            <head><meta charset="utf-8"></head>
+            <body>
+                <table border="1">
+                    <tr><th colspan="5" style="background:#B68A2E;color:#fff">ZOVRAKE — Expediente ${esc(exp.codigo)}</th></tr>
+                    <tr><td>Obra</td><td colspan="4">${esc(exp.obra)}</td></tr>
+                    <tr><td>Partida</td><td colspan="4">${esc(exp.partida)}</td></tr>
+                    <tr><td>Requerido por</td><td colspan="4">${esc(exp.requeridoPor)}</td></tr>
+                    <tr><td>Fecha máxima</td><td colspan="4">${esc(exp.fechaMaxima)}</td></tr>
+                    <tr></tr>
+                    <tr>
+                        <th>Ítem</th><th>Descripción de Material</th><th>U.M.</th>
+                        <th>Cantidad</th><th>Observaciones</th>
+                    </tr>
+                    ${exp.materiales.map((m, i) => `
+                        <tr>
+                            <td>${i + 1}</td><td>${esc(m.descripcion)}</td><td>${esc(m.um)}</td>
+                            <td>${esc(m.cantidad)}</td><td>${esc(m.observaciones)}</td>
+                        </tr>`).join("")}
+                </table>
+            </body></html>`;
+
+        descargar(new Blob([html], { type: "application/vnd.ms-excel" }), `${exp.codigo}.xls`);
+    }
+
+    function imprimirComoPDF(exp) {
+        const ventana = window.open("", "_blank");
+        if (!ventana) return;
+        ventana.document.write(`
+            <html><head><meta charset="utf-8"><title>${esc(exp.codigo)}</title></head>
+            <body style="font-family:Arial,sans-serif;padding:24px">
+                <h1 style="color:#B68A2E">ZOVRAKE — Expediente Digital</h1>
+                <h2>${esc(exp.codigo)}</h2>
+                <table cellpadding="4">${cabeceraHTML(exp)}</table>
+                <h3>Detalle del Requerimiento</h3>
+                ${tablaMaterialesHTML()(exp)}
+                <h3>Observaciones Generales</h3>
+                <p>${esc(exp.observacionesGenerales) || "—"}</p>
+                <script>window.onload=function(){window.print();}<\/script>
+            </body></html>`);
+        ventana.document.close();
+    }
+
+    function descargarPDF(exp) {
+        return cargarJsPDF().then((JsPDF) => {
+            if (!JsPDF) { imprimirComoPDF(exp); return; }
+
+            const doc = new JsPDF({ unit: "pt", format: "a4" });
+            const margen = 40;
+            let y = 50;
+
+            doc.setFontSize(18);
+            doc.setTextColor(182, 138, 46);
+            doc.text("ZOVRAKE — Expediente Digital", margen, y);
+
+            y += 24;
+            doc.setFontSize(13);
+            doc.setTextColor(40, 40, 40);
+            doc.text(exp.codigo, margen, y);
+
+            y += 22;
+            doc.setFontSize(10);
+            fila(exp).forEach(([k, v]) => {
+                doc.setTextColor(120, 120, 120);
+                doc.text(`${k}:`, margen, y);
+                doc.setTextColor(40, 40, 40);
+                doc.text(String(v == null ? "" : v), margen + 130, y);
+                y += 16;
+            });
+
+            y += 10;
+            doc.setFontSize(12);
+            doc.setTextColor(182, 138, 46);
+            doc.text("Detalle del Requerimiento", margen, y);
+            y += 16;
+
+            doc.setFontSize(9);
+            doc.setTextColor(40, 40, 40);
+            doc.text("Ítem", margen, y);
+            doc.text("Descripción", margen + 40, y);
+            doc.text("U.M.", margen + 300, y);
+            doc.text("Cant.", margen + 360, y);
+            y += 4;
+            doc.line(margen, y, 555, y);
+            y += 14;
+
+            exp.materiales.forEach((m, i) => {
+                if (y > 780) { doc.addPage(); y = 50; }
+                doc.text(String(i + 1), margen, y);
+                doc.text(String(m.descripcion || "").slice(0, 60), margen + 40, y);
+                doc.text(String(m.um || ""), margen + 300, y);
+                doc.text(String(m.cantidad || ""), margen + 360, y);
+                y += 15;
+            });
+
+            if (exp.observacionesGenerales) {
+                y += 16;
+                doc.setTextColor(182, 138, 46);
+                doc.setFontSize(12);
+                doc.text("Observaciones Generales", margen, y);
+                y += 16;
+                doc.setTextColor(40, 40, 40);
+                doc.setFontSize(10);
+                doc.text(doc.splitTextToSize(exp.observacionesGenerales, 515), margen, y);
+            }
+
+            doc.save(`${exp.codigo}.pdf`);
+        }).catch(() => imprimirComoPDF(exp));
+    }
+
+    return { descargarPDF, descargarWord, descargarExcel };
+})();
+
+/* --------------------------------------------------------
+   NuevoRequerimiento — formulario (4 tarjetas) + comportamiento
+   -------------------------------------------------------- */
+
+const NuevoRequerimiento = (function () {
+
+    // Estado de trabajo del formulario en curso (vive solo en sesión).
+    let materiales = [];
+    let adjuntos = [];
+
+    function nuevaFila() {
+        return { descripcion: "", um: "", cantidad: "", observaciones: "" };
+    }
+
+    function fechaHoyISO() {
+        const d = new Date();
+        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+        return d.toISOString().slice(0, 10);
+    }
+
+    /* ---------- RENDER (HTML del submódulo) ---------- */
+
+    function campo(id, etiqueta, { req = false, tipo = "text", autocomplete = false, valor = "" } = {}) {
+        return `
+            <div class="nr-field" data-field="${id}">
+                <label class="nr-label" for="nr-${id}">${etiqueta}${req ? ' <span class="nr-req">*</span>' : ""}</label>
+                <input class="nr-input" id="nr-${id}" type="${tipo}" value="${PanelUtils.escapar(valor)}"
+                    autocomplete="off" ${autocomplete ? 'data-ac="1"' : ""}>
+                ${autocomplete ? '<ul class="nr-suggest" hidden></ul>' : ""}
+                <span class="nr-error" hidden></span>
+            </div>`;
+    }
+
+    function render() {
+        const obras = RequerimientosDB.obtenerObras();
+        const opciones = obras
+            .map((o) => `<option value="${PanelUtils.escapar(o.nombre)}">${PanelUtils.escapar(o.nombre)}</option>`)
+            .join("");
+
+        return `
+        <form class="nr" id="nr-form" novalidate>
+
+            <div class="nr-head">
+                <div>
+                    <h2 class="nr-title">Nuevo Requerimiento</h2>
+                    <p class="nr-sub">Escribe la información una sola vez. El sistema alimentará el resto del ERP automáticamente.</p>
+                </div>
+            </div>
+
+            <div class="nr-alert" id="nr-alert" hidden></div>
+
+            <!-- TARJETA 1 — INFORMACIÓN GENERAL -->
+            <section class="nr-card">
+                <header class="nr-card-head">
+                    <span class="nr-step">1</span>
+                    <h3 class="nr-card-title">Información General</h3>
+                </header>
+
+                <div class="nr-grid">
+                    <div class="nr-field" data-field="obra">
+                        <label class="nr-label" for="nr-obra">Obra <span class="nr-req">*</span></label>
+                        <select class="nr-input" id="nr-obra">
+                            <option value="">Selecciona una obra…</option>
+                            ${opciones}
+                        </select>
+                        <span class="nr-error" hidden></span>
+                    </div>
+
+                    ${campo("partida", "Partida", { req: true, autocomplete: true })}
+                    ${campo("requeridoPor", "Requerido por", { req: true, autocomplete: true })}
+                    ${campo("cargoRequerido", "Cargo", { autocomplete: true })}
+                    ${campo("recibidoPor", "Recibido por", { req: true, autocomplete: true })}
+                    ${campo("cargoRecibido", "Cargo", { autocomplete: true })}
+                    ${campo("fecha", "Fecha", { req: true, tipo: "date", valor: fechaHoyISO() })}
+                    ${campo("lugarEntrega", "Lugar de entrega", { req: true, autocomplete: true })}
+                    ${campo("fechaMaxima", "Fecha máxima de ingreso a obra", { req: true, tipo: "date" })}
+                </div>
+            </section>
+
+            <!-- TARJETA 2 — DETALLE DEL REQUERIMIENTO -->
+            <section class="nr-card">
+                <header class="nr-card-head">
+                    <span class="nr-step">2</span>
+                    <h3 class="nr-card-title">Detalle del Requerimiento</h3>
+                    <button type="button" class="nr-btn nr-btn-soft" data-nr="add-row">+ Agregar fila</button>
+                </header>
+
+                <div class="nr-table-wrap zv-no-scrollbar">
+                    <table class="nr-table">
+                        <thead>
+                            <tr>
+                                <th class="nr-th-item">Ítem</th>
+                                <th>Descripción de Material</th>
+                                <th class="nr-th-um">U.M.</th>
+                                <th class="nr-th-cant">Cantidad</th>
+                                <th>Observaciones</th>
+                                <th class="nr-th-acc"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="nr-tbody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- TARJETA 3 — OBSERVACIONES GENERALES -->
+            <section class="nr-card">
+                <header class="nr-card-head">
+                    <span class="nr-step">3</span>
+                    <h3 class="nr-card-title">Observaciones Generales</h3>
+                </header>
+
+                <textarea class="nr-input nr-textarea" id="nr-observaciones" rows="4"
+                    spellcheck="true"
+                    placeholder="Indicaciones, condiciones de entrega, detalles relevantes…"></textarea>
+                <div class="nr-spell" id="nr-spell-obs" hidden></div>
+            </section>
+
+            <!-- TARJETA 4 — DOCUMENTOS ADJUNTOS -->
+            <section class="nr-card">
+                <header class="nr-card-head">
+                    <span class="nr-step">4</span>
+                    <h3 class="nr-card-title">Documentos Adjuntos</h3>
+                </header>
+
+                <div class="nr-drop" id="nr-drop" tabindex="0">
+                    <input type="file" id="nr-files" multiple hidden
+                        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.dwg,.txt">
+                    <div class="nr-drop-inner">
+                        <span class="nr-drop-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 16v2.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V16"/></svg>
+                        </span>
+                        <span>Arrastra fotos, planos, PDF o especificaciones, o <strong>haz clic para subir</strong></span>
+                    </div>
+                </div>
+                <ul class="nr-files" id="nr-file-list"></ul>
+            </section>
+
+            <!-- ACCIONES -->
+            <div class="nr-actions">
+                <button type="button" class="nr-btn nr-btn-ghost" data-nr="cancelar">Cancelar</button>
+                <button type="button" class="nr-btn nr-btn-soft" data-nr="borrador">Guardar Borrador</button>
+                <button type="button" class="nr-btn nr-btn-primary" data-nr="generar">Generar Expediente Digital</button>
+            </div>
+
+        </form>`;
+    }
+
+    /* ---------- TABLA DE MATERIALES ---------- */
+
+    function filaHTML(m, idx) {
+        return `
+            <tr class="nr-row" data-idx="${idx}">
+                <td class="nr-col-item">${idx + 1}</td>
+                <td>
+                    <div class="nr-cell-ac">
+                        <input class="nr-input" data-col="descripcion" data-ac-mat="1"
+                            autocomplete="off" value="${PanelUtils.escapar(m.descripcion)}"
+                            placeholder="Escribe el material…">
+                        <ul class="nr-suggest" hidden></ul>
+                    </div>
+                </td>
+                <td><input class="nr-input nr-um" data-col="um" value="${PanelUtils.escapar(m.um)}" placeholder="und"></td>
+                <td><input class="nr-input nr-cant" data-col="cantidad" type="number" min="0" step="any" value="${PanelUtils.escapar(m.cantidad)}"></td>
+                <td><input class="nr-input" data-col="observaciones" value="${PanelUtils.escapar(m.observaciones)}" placeholder="Opcional"></td>
+                <td class="nr-row-actions">
+                    <button type="button" data-row="up" title="Subir">▲</button>
+                    <button type="button" data-row="down" title="Bajar">▼</button>
+                    <button type="button" data-row="dup" title="Duplicar fila">⧉</button>
+                    <button type="button" data-row="del" title="Eliminar fila">✕</button>
+                </td>
+            </tr>`;
+    }
+
+    function pintarTabla(root) {
+        const tbody = root.querySelector("#nr-tbody");
+        if (!tbody) return;
+        tbody.innerHTML = materiales.map((m, i) => filaHTML(m, i)).join("");
+    }
+
+    /* ---------- ADJUNTOS ---------- */
+
+    function formatoTamano(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+        return (bytes / 1048576).toFixed(1) + " MB";
+    }
+
+    function pintarAdjuntos(root) {
+        const lista = root.querySelector("#nr-file-list");
+        if (!lista) return;
+
+        lista.innerHTML = adjuntos.map((a, i) => `
+            <li class="nr-file">
+                <span class="nr-file-name">${PanelUtils.escapar(a.nombre)}</span>
+                <span class="nr-file-size">${formatoTamano(a.tamano)}</span>
+                <button type="button" class="nr-file-del" data-file="${i}" title="Quitar">✕</button>
+            </li>`).join("");
+    }
+
+    function agregarArchivos(root, fileList) {
+        Array.from(fileList).forEach((f) => {
+            adjuntos.push({ nombre: f.name, tipo: f.type, tamano: f.size, ref: f });
+        });
+        pintarAdjuntos(root);
+    }
+
+    /* ---------- AUTOCOMPLETADO GENÉRICO ---------- */
+
+    // Conecta un input con una lista flotante de sugerencias.
+    // proveedor(texto) -> [string] | [{label, value, meta}]
+    // alElegir(item) -> callback opcional tras seleccionar.
+    function autocompletar(input, proveedor, alElegir) {
+        const lista = input.parentElement.querySelector(".nr-suggest");
+        if (!lista) return;
+
+        function cerrar() { lista.hidden = true; lista.innerHTML = ""; }
+
+        function abrir() {
+            const items = proveedor(input.value) || [];
+            if (items.length === 0) { cerrar(); return; }
+
+            lista.innerHTML = items.map((it) => {
+                const label = typeof it === "string" ? it : it.label;
+                const meta = (typeof it === "object" && it.meta) ? `<span class="nr-suggest-meta">${PanelUtils.escapar(it.meta)}</span>` : "";
+                return `<li class="nr-suggest-item" data-val="${PanelUtils.escapar(typeof it === "string" ? it : it.value)}">${PanelUtils.escapar(label)}${meta}</li>`;
+            }).join("");
+            lista.hidden = false;
+        }
+
+        input.addEventListener("input", abrir);
+        input.addEventListener("focus", abrir);
+        input.addEventListener("blur", () => setTimeout(cerrar, 150));
+
+        lista.addEventListener("mousedown", (e) => {
+            const opcion = e.target.closest(".nr-suggest-item");
+            if (!opcion) return;
+            e.preventDefault();
+            input.value = opcion.dataset.val;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            if (alElegir) alElegir(opcion.dataset.val);
+            cerrar();
+        });
+    }
+
+    /* ---------- ORTOGRAFÍA (sugerencias) ---------- */
+
+    function revisarOrtografia(texto, contenedor) {
+        const hallazgos = Ortografia.revisar(texto);
+        if (hallazgos.length === 0) { contenedor.hidden = true; contenedor.innerHTML = ""; return; }
+
+        contenedor.hidden = false;
+        contenedor.innerHTML =
+            `<span class="nr-spell-label">Sugerencias:</span> ` +
+            hallazgos.map((h) =>
+                `<button type="button" class="nr-spell-chip" data-mal="${PanelUtils.escapar(h.palabra)}" data-bien="${PanelUtils.escapar(h.sugerencia)}">${PanelUtils.escapar(h.palabra)} → <strong>${PanelUtils.escapar(h.sugerencia)}</strong></button>`
+            ).join("");
+    }
+
+    /* ---------- RECOLECCIÓN Y VALIDACIÓN ---------- */
+
+    function valor(root, id) {
+        const el = root.querySelector(`#nr-${id}`);
+        return el ? el.value.trim() : "";
+    }
+
+    function recolectar(root) {
+        return {
+            obra:               valor(root, "obra"),
+            partida:            valor(root, "partida"),
+            requeridoPor:       valor(root, "requeridoPor"),
+            cargoRequerido:     valor(root, "cargoRequerido"),
+            recibidoPor:        valor(root, "recibidoPor"),
+            cargoRecibido:      valor(root, "cargoRecibido"),
+            fecha:              valor(root, "fecha"),
+            lugarEntrega:       valor(root, "lugarEntrega"),
+            fechaMaxima:        valor(root, "fechaMaxima"),
+            observacionesGenerales: (root.querySelector("#nr-observaciones") || {}).value || "",
+            materiales: materiales
+                .map((m) => ({ ...m, cantidad: m.cantidad }))
+                .filter((m) => m.descripcion.trim() !== ""),
+            adjuntos: adjuntos.map((a) => ({ nombre: a.nombre, tipo: a.tipo, tamano: a.tamano }))
+        };
+    }
+
+    function limpiarErrores(root) {
+        root.querySelectorAll(".nr-field").forEach((f) => f.classList.remove("nr-invalid"));
+        root.querySelectorAll(".nr-error").forEach((e) => { e.hidden = true; e.textContent = ""; });
+    }
+
+    function marcarError(root, id, mensaje) {
+        const field = root.querySelector(`.nr-field[data-field="${id}"]`);
+        if (!field) return;
+        field.classList.add("nr-invalid");
+        const span = field.querySelector(".nr-error");
+        if (span) { span.hidden = false; span.textContent = mensaje; }
+    }
+
+    function mostrarAlerta(root, tipo, html) {
+        const alerta = root.querySelector("#nr-alert");
+        if (!alerta) return;
+        alerta.className = `nr-alert is-${tipo}`;
+        alerta.innerHTML = html;
+        alerta.hidden = false;
+        alerta.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    // Validación completa para "Generar". Devuelve true/false.
+    function validarCompleto(root, datos) {
+        limpiarErrores(root);
+        const errores = [];
+
+        const obligatorios = [
+            ["obra", "Selecciona una obra."],
+            ["partida", "Indica la partida."],
+            ["requeridoPor", "Indica quién lo requiere."],
+            ["recibidoPor", "Indica quién recibe."],
+            ["lugarEntrega", "Indica el lugar de entrega."],
+            ["fecha", "Indica la fecha."],
+            ["fechaMaxima", "Indica la fecha máxima de ingreso."]
+        ];
+
+        obligatorios.forEach(([id, msg]) => {
+            if (!datos[id]) { marcarError(root, id, msg); errores.push(msg); }
+        });
+
+        // Materiales: al menos uno, con descripción y cantidad > 0.
+        if (datos.materiales.length === 0) {
+            errores.push("Agrega al menos un material con su cantidad.");
+        } else {
+            const sinCantidad = datos.materiales.some(
+                (m) => !(parseFloat(m.cantidad) > 0)
+            );
+            if (sinCantidad) errores.push("Cada material debe tener una cantidad mayor a 0.");
+        }
+
+        if (errores.length > 0) {
+            mostrarAlerta(root, "error",
+                `<strong>Revisa el formulario:</strong><ul>${errores.map((e) => `<li>${PanelUtils.escapar(e)}</li>`).join("")}</ul>`);
+            return false;
+        }
+        return true;
+    }
+
+    /* ---------- ACCIONES ---------- */
+
+    function guardarBorrador(root) {
+        const datos = recolectar(root);
+
+        if (!datos.obra) {
+            limpiarErrores(root);
+            marcarError(root, "obra", "Selecciona una obra para guardar el borrador.");
+            mostrarAlerta(root, "error", "Para guardar un borrador necesitas al menos seleccionar la obra.");
+            return;
+        }
+
+        const exp = RequerimientosDB.guardarBorrador(datos);
+        mostrarAlerta(root, "ok",
+            `Borrador <strong>${PanelUtils.escapar(exp.codigo)}</strong> guardado. Podrás retomarlo desde la Bandeja de Trabajo. ` +
+            `<button type="button" class="nr-link" data-accion="quick" data-destino="bandeja-trabajo">Ir a la Bandeja</button>`);
+    }
+
+    function generarExpediente(root) {
+        const datos = recolectar(root);
+        if (!validarCompleto(root, datos)) return;
+
+        const exp = RequerimientosDB.generarExpediente(datos);
+        pantallaExito(root, exp);
+    }
+
+    // Reemplaza el formulario por una confirmación con descargas.
+    function pantallaExito(root, exp) {
+        const ws = root.closest("#req-workspace") || root.parentElement;
+        ws.innerHTML = `
+            <div class="nr-success">
+                <div class="nr-success-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5 4.5-5"/></svg>
+                </div>
+                <h2 class="nr-success-title">Expediente Digital generado</h2>
+                <p class="nr-success-text">
+                    Se creó el expediente <strong>${PanelUtils.escapar(exp.codigo)}</strong> para la obra
+                    <strong>${PanelUtils.escapar(exp.obra)}</strong>. Quedó registrado en Documentos y se actualizaron
+                    el Panel de Control, la Bandeja, el Seguimiento, el Historial y las Notificaciones.
+                </p>
+
+                <p class="nr-success-sub">Documentos generados</p>
+                <div class="nr-doc-buttons">
+                    <button type="button" class="nr-btn nr-btn-soft" data-doc="pdf" data-codigo="${exp.codigo}">Descargar PDF</button>
+                    <button type="button" class="nr-btn nr-btn-soft" data-doc="word" data-codigo="${exp.codigo}">Descargar Word</button>
+                    <button type="button" class="nr-btn nr-btn-soft" data-doc="excel" data-codigo="${exp.codigo}">Descargar Excel</button>
+                </div>
+
+                <div class="nr-success-actions">
+                    <button type="button" class="nr-btn nr-btn-primary" data-nr="nuevo-otro">Crear otro requerimiento</button>
+                    <button type="button" class="nr-btn nr-btn-ghost" data-accion="volver-panel">Ir al Panel de Control</button>
+                </div>
+            </div>`;
+
+        // Listeners de la pantalla de éxito (descargas + crear otro).
+        ws.querySelectorAll("[data-doc]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                if (btn.dataset.doc === "pdf") DocumentGenerator.descargarPDF(exp);
+                else if (btn.dataset.doc === "word") DocumentGenerator.descargarWord(exp);
+                else DocumentGenerator.descargarExcel(exp);
+            });
+        });
+
+        const otro = ws.querySelector('[data-nr="nuevo-otro"]');
+        if (otro) otro.addEventListener("click", () => ReqWorkspace.render("nuevo-requerimiento"));
+    }
+
+    function cancelar(root) {
+        const hayDatos = recolectar(root).obra || materiales.some((m) => m.descripcion) || adjuntos.length;
+        if (hayDatos && !confirm("¿Descartar los cambios no guardados?")) return;
+        ReqWorkspace.irATab("panel-control");
+    }
+
+    /* ---------- MONTAJE / WIRING ---------- */
+
+    function montar(ws) {
+        const root = ws.querySelector("#nr-form");
+        if (!root) return;
+
+        // Estado inicial: una fila vacía, sin adjuntos.
+        materiales = [nuevaFila()];
+        adjuntos = [];
+        pintarTabla(root);
+
+        // Obra -> autocompleta el resto de la Tarjeta 1.
+        const selObra = root.querySelector("#nr-obra");
+        selObra.addEventListener("change", () => {
+            const d = RequerimientosDB.datosObra(selObra.value);
+            const set = (id, v) => { const el = root.querySelector(`#nr-${id}`); if (el && !el.value) el.value = v || ""; };
+            set("lugarEntrega", d.lugarEntrega);
+            set("requeridoPor", d.requeridoPor);
+            set("cargoRequerido", d.cargoRequerido);
+            set("recibidoPor", d.recibidoPor);
+            set("cargoRecibido", d.cargoRecibido);
+        });
+
+        // Autocompletado de los campos de la Tarjeta 1.
+        const campoAC = [
+            ["partida", (t) => RequerimientosDB.sugerirPartidas(selObra.value, t)],
+            ["requeridoPor", (t) => RequerimientosDB.sugerirCampo(selObra.value, "requeridoPor", t)],
+            ["cargoRequerido", (t) => RequerimientosDB.sugerirCampo(selObra.value, "cargoRequerido", t)],
+            ["recibidoPor", (t) => RequerimientosDB.sugerirCampo(selObra.value, "recibidoPor", t)],
+            ["cargoRecibido", (t) => RequerimientosDB.sugerirCampo(selObra.value, "cargoRecibido", t)],
+            ["lugarEntrega", (t) => RequerimientosDB.sugerirCampo(selObra.value, "lugarEntrega", t)]
+        ];
+        campoAC.forEach(([id, proveedor]) => {
+            const input = root.querySelector(`#nr-${id}`);
+            if (input) autocompletar(input, proveedor);
+        });
+
+        // Tabla: cambios de valor (delegación input).
+        const tbody = root.querySelector("#nr-tbody");
+
+        tbody.addEventListener("input", (e) => {
+            const input = e.target;
+            const fila = input.closest(".nr-row");
+            if (!fila) return;
+            const idx = parseInt(fila.dataset.idx, 10);
+            const col = input.dataset.col;
+            if (col && materiales[idx]) materiales[idx][col] = input.value;
+        });
+
+        // Tabla: acciones de fila (delegación click).
+        tbody.addEventListener("click", (e) => {
+            const boton = e.target.closest("[data-row]");
+            if (!boton) return;
+            const fila = boton.closest(".nr-row");
+            const idx = parseInt(fila.dataset.idx, 10);
+            const accion = boton.dataset.row;
+
+            if (accion === "del") {
+                materiales.splice(idx, 1);
+                if (materiales.length === 0) materiales.push(nuevaFila());
+            } else if (accion === "dup") {
+                materiales.splice(idx + 1, 0, { ...materiales[idx] });
+            } else if (accion === "up" && idx > 0) {
+                [materiales[idx - 1], materiales[idx]] = [materiales[idx], materiales[idx - 1]];
+            } else if (accion === "down" && idx < materiales.length - 1) {
+                [materiales[idx + 1], materiales[idx]] = [materiales[idx], materiales[idx + 1]];
+            }
+            pintarTabla(root);
+        });
+
+        // Tabla: autocompletado inteligente de materiales (delegación focusin).
+        tbody.addEventListener("focusin", (e) => {
+            const input = e.target;
+            if (input.dataset.acMat !== "1") return;
+            if (input.dataset.acReady === "1") return;
+            input.dataset.acReady = "1";
+
+            const fila = input.closest(".nr-row");
+            const idx = parseInt(fila.dataset.idx, 10);
+
+            autocompletar(
+                input,
+                (t) => RequerimientosDB.sugerirMateriales(selObra.value, t)
+                    .map((m) => ({ label: m.descripcion, value: m.descripcion, meta: m.um || "" })),
+                (descripcion) => {
+                    // Al elegir, autocompleta la U.M. si está vacía.
+                    const um = RequerimientosDB.umDeMaterial(selObra.value, descripcion);
+                    const umInput = fila.querySelector('[data-col="um"]');
+                    if (um && umInput && !umInput.value) {
+                        umInput.value = um;
+                        materiales[idx].um = um;
+                    }
+                    materiales[idx].descripcion = descripcion;
+                }
+            );
+            // Dispara para mostrar sugerencias en el primer foco.
+            input.dispatchEvent(new Event("focus"));
+        });
+
+        // Agregar fila.
+        root.querySelector('[data-nr="add-row"]').addEventListener("click", () => {
+            materiales.push(nuevaFila());
+            pintarTabla(root);
+        });
+
+        // Observaciones generales: ortografía (no destructiva).
+        const obs = root.querySelector("#nr-observaciones");
+        const spellObs = root.querySelector("#nr-spell-obs");
+        obs.addEventListener("input", () => revisarOrtografia(obs.value, spellObs));
+        spellObs.addEventListener("click", (e) => {
+            const chip = e.target.closest(".nr-spell-chip");
+            if (!chip) return;
+            const re = new RegExp(`\\b${chip.dataset.mal}\\b`, "g");
+            obs.value = obs.value.replace(re, chip.dataset.bien);
+            revisarOrtografia(obs.value, spellObs);
+        });
+
+        // Adjuntos: clic, teclado, drag & drop, eliminar.
+        const drop = root.querySelector("#nr-drop");
+        const fileInput = root.querySelector("#nr-files");
+
+        drop.addEventListener("click", () => fileInput.click());
+        drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+        fileInput.addEventListener("change", () => agregarArchivos(root, fileInput.files));
+
+        ["dragover", "dragenter"].forEach((ev) =>
+            drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("is-over"); }));
+        ["dragleave", "drop"].forEach((ev) =>
+            drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("is-over"); }));
+        drop.addEventListener("drop", (e) => { if (e.dataTransfer) agregarArchivos(root, e.dataTransfer.files); });
+
+        root.querySelector("#nr-file-list").addEventListener("click", (e) => {
+            const del = e.target.closest(".nr-file-del");
+            if (!del) return;
+            adjuntos.splice(parseInt(del.dataset.file, 10), 1);
+            pintarAdjuntos(root);
+        });
+
+        // Botones principales.
+        root.querySelector('[data-nr="borrador"]').addEventListener("click", () => guardarBorrador(root));
+        root.querySelector('[data-nr="generar"]').addEventListener("click", () => generarExpediente(root));
+        root.querySelector('[data-nr="cancelar"]').addEventListener("click", () => cancelar(root));
+    }
+
+    return { render, montar };
+})();
+
 /* --------------------------------------------------------
    REQ WORKSPACE — dispatcher del contenedor #req-workspace
    --------------------------------------------------------
    Decide qué submódulo se pinta según la clave de la pestaña.
-   Solo "panel-control" está desarrollado; el resto muestran un
-   marcador neutro (estado base del workspace) hasta su fase.
+   "panel-control" y "nuevo-requerimiento" están desarrollados;
+   el resto muestran un marcador neutro hasta su fase.
    Centraliza también la navegación interna programática para
    reutilizar la misma navegación que el usuario (sin recargas).
    -------------------------------------------------------- */
@@ -1319,9 +2581,14 @@ const ReqWorkspace = (function () {
         const ws = contenedor();
         if (!ws) return;
 
-        ws.innerHTML = (claveTab === "panel-control")
-            ? PanelControl.render()
-            : placeholder(claveTab, params);
+        if (claveTab === "panel-control") {
+            ws.innerHTML = PanelControl.render();
+        } else if (claveTab === "nuevo-requerimiento") {
+            ws.innerHTML = NuevoRequerimiento.render();
+            NuevoRequerimiento.montar(ws);
+        } else {
+            ws.innerHTML = placeholder(claveTab, params);
+        }
 
         ws.scrollTop = 0;
     }
