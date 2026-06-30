@@ -772,16 +772,17 @@
 
             </div>
 
-            <!-- Vista: Configuración -->
+            <!-- Vista: Configuración General (núcleo del ERP) -->
             <div class="dashboard-view" id="view-configuracion">
 
-                <h2 class="dashboard-view-title">Configuración</h2>
+                <!-- El módulo se monta por completo desde script.js
+                     (ConfiguracionGeneral). No se escribe contenido
+                     estático para mantener una única fuente de verdad. -->
+                <div class="cfg-root zv-no-scrollbar" id="cfg-root"></div>
 
-                <p class="dashboard-view-text">
-
-                    Las opciones de configuración estarán disponibles próximamente.
-
-                </p>
+                <!-- Selector de archivo reutilizable para el logo
+                     (oculto; lo dispara el botón de la tarjeta de logo). -->
+                <input type="file" id="cfg-logo-input" accept="image/*" hidden>
 
             </div>
 
