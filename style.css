@@ -3144,6 +3144,28 @@ select.nr-input{
     font-weight: 600;
 }
 
+/* Nota informativa bajo un campo (p. ej. obra sin registrar). */
+.nr-hint-inline{
+    color: var(--dash-text-soft);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+/* Empresa identificada automáticamente al elegir la obra. */
+.nr-empresa-info{
+    margin-top: 2px;
+    padding: 7px 10px;
+
+    background: var(--dash-active, #EAE6DB);
+    border-radius: 8px;
+
+    color: var(--dash-text-soft, #76726A);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.nr-empresa-info strong{ color: var(--dash-text, #26241E); }
+
 /* --- Autocompletado (lista flotante) --- */
 
 .nr-suggest{
@@ -3898,13 +3920,10 @@ select.nr-input{
 
 .cfg-editor-titles{ flex: 1; }
 
-/* ---------- Editor: rejilla principal + vista previa ---------- */
+/* ---------- Editor: contenedor principal ---------- */
 
 .cfg-editor-grid{
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    gap: 24px;
-    align-items: start;
+    max-width: 860px;
 }
 
 /* ---------- Pestañas internas ---------- */
@@ -4046,13 +4065,19 @@ select.cfg-input{ cursor: pointer; }
 }
 
 .cfg-logo-preview{
-    width: 96px;
+    /* Banda de altura fija cuyo ancho se adapta a la proporción del
+       logo (entre un mínimo y un máximo). El logo nunca se deforma. */
+    width: auto;
+    min-width: 96px;
+    max-width: 240px;
     height: 96px;
     flex-shrink: 0;
 
     display: flex;
     align-items: center;
     justify-content: center;
+
+    padding: 10px;
 
     background: var(--dash-bg);
     border: 1px solid var(--dash-border);
@@ -4061,8 +4086,12 @@ select.cfg-input{ cursor: pointer; }
 }
 
 .cfg-logo-preview img{
-    width: 100%;
-    height: 100%;
+    /* Conserva la proporción original y se ajusta al espacio. */
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    display: block;
     object-fit: contain;
 }
 
@@ -4171,282 +4200,6 @@ select.cfg-input{ cursor: pointer; }
 
 .cfg-obras-empty{ margin: 0; }
 
-/* ---------- Identidad corporativa (colores) ---------- */
-
-.cfg-color-list{
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.cfg-color-field{
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-
-    padding: 14px 16px;
-
-    background: var(--dash-sidebar);
-    border: 1px solid var(--dash-border);
-    border-radius: 12px;
-}
-
-.cfg-color-info .cfg-hint{ margin: 2px 0 0; }
-
-.cfg-color-control{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-}
-
-.cfg-color-input{
-    width: 46px;
-    height: 40px;
-    padding: 0;
-    border: 1px solid var(--dash-border);
-    border-radius: 9px;
-    background: var(--dash-bg);
-    cursor: pointer;
-}
-
-.cfg-color-input::-webkit-color-swatch-wrapper{ padding: 4px; }
-.cfg-color-input::-webkit-color-swatch{ border: none; border-radius: 5px; }
-
-.cfg-color-hex{
-    width: 96px;
-    text-transform: uppercase;
-}
-
-/* ---------- Plantillas ---------- */
-
-.cfg-plantilla-grid{
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 14px;
-}
-
-.cfg-plantilla{
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    text-align: left;
-
-    padding: 14px;
-
-    background: var(--dash-bg);
-    border: 1.5px solid var(--dash-border);
-    border-radius: 12px;
-
-    cursor: pointer;
-    font-family: inherit;
-    transition: border-color 0.18s, box-shadow 0.18s, transform 0.05s;
-}
-
-.cfg-plantilla:hover{ border-color: var(--dash-accent); }
-.cfg-plantilla:active{ transform: translateY(1px); }
-
-.cfg-plantilla.is-selected{
-    border-color: var(--dash-accent);
-    box-shadow: 0 0 0 3px rgba(182, 138, 46, 0.15);
-}
-
-.cfg-plantilla-mini{
-    display: block;
-    height: 64px;
-    padding: 8px;
-    background: var(--dash-sidebar);
-    border: 1px solid var(--dash-border);
-    border-radius: 8px;
-}
-
-.cfg-plantilla-mini-head{
-    display: block;
-    height: 14px;
-    background: var(--dash-accent);
-    border-radius: 3px;
-    margin-bottom: 7px;
-}
-
-.cfg-plantilla-mini-line{
-    display: block;
-    height: 6px;
-    background: var(--dash-border);
-    border-radius: 3px;
-    margin-bottom: 5px;
-}
-
-.cfg-plantilla-mini-line.short{ width: 60%; }
-
-/* Variaciones visuales de la miniatura por plantilla. */
-.cfg-tpl-ejecutiva .cfg-plantilla-mini-head{ height: 7px; }
-.cfg-tpl-moderna .cfg-plantilla-mini-head{ border-radius: 7px; height: 12px; }
-.cfg-tpl-moderna .cfg-plantilla-mini{ border-radius: 12px; }
-.cfg-tpl-clasica .cfg-plantilla-mini{ border-width: 2px; }
-.cfg-tpl-clasica .cfg-plantilla-mini-head{ border-radius: 0; }
-
-.cfg-plantilla-name{
-    color: var(--dash-text);
-    font-size: 14px;
-    font-weight: 700;
-}
-
-.cfg-plantilla-desc{
-    color: var(--dash-text-soft);
-    font-size: 11.5px;
-    line-height: 1.45;
-}
-
-/* ---------- Vista previa (panel) ---------- */
-
-.cfg-preview-wrap{
-    position: sticky;
-    top: 0;
-
-    background: var(--dash-sidebar);
-    border: 1px solid var(--dash-border);
-    border-radius: var(--cfg-radius);
-    overflow: hidden;
-}
-
-.cfg-preview-head{
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    padding: 12px 16px;
-    background: var(--dash-bg);
-    border-bottom: 1px solid var(--dash-border);
-
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--dash-text);
-}
-
-.cfg-preview-hint{
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--dash-accent);
-}
-
-.cfg-preview{ padding: 18px; }
-
-/* ---------- Documento simulado (hereda identidad corporativa) ---------- */
-
-.cfg-doc{
-    background: #fff;
-    border: 1px solid var(--dash-border);
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 6px 18px rgba(38, 36, 30, 0.1);
-    font-size: 11px;
-    color: #2b2b2b;
-}
-
-.cfg-doc-header{
-    display: flex;
-    align-items: center;
-    gap: 10px;
-
-    padding: 12px;
-    background: var(--doc-encabezado);
-    color: #fff;
-}
-
-.cfg-doc-logo{
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    background: rgba(255, 255, 255, 0.92);
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.cfg-doc-logo img{ width: 100%; height: 100%; object-fit: contain; }
-
-.cfg-doc-logo-fallback{
-    font-size: 18px;
-    font-weight: 800;
-    color: var(--doc-principal);
-}
-
-.cfg-doc-empresa{
-    display: flex;
-    flex-direction: column;
-    line-height: 1.3;
-    flex: 1;
-    min-width: 0;
-}
-
-.cfg-doc-empresa strong{ font-size: 12.5px; }
-.cfg-doc-empresa span{ font-size: 10px; opacity: 0.85; }
-
-.cfg-doc-tipo{
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    opacity: 0.85;
-    text-align: right;
-}
-
-.cfg-doc-body{ padding: 14px 12px; }
-
-.cfg-doc-title{
-    color: var(--doc-principal);
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: 0.5px;
-    margin-bottom: 10px;
-    padding-bottom: 6px;
-    border-bottom: 2px solid var(--doc-principal);
-}
-
-.cfg-doc-table{
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 10px;
-}
-
-.cfg-doc-table th{
-    background: var(--doc-tablas);
-    color: #2b2b2b;
-    text-align: left;
-    padding: 6px 8px;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-
-.cfg-doc-table td{
-    padding: 6px 8px;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.cfg-doc-foot{
-    padding: 8px 12px;
-    background: #f5f4f0;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
-    font-size: 9px;
-    color: #76726a;
-    text-align: right;
-}
-
-/* Acentos por plantilla en el documento simulado. */
-.cfg-doc.cfg-tpl-ejecutiva .cfg-doc-header{ padding: 8px 12px; }
-.cfg-doc.cfg-tpl-ejecutiva .cfg-doc-title{ border-bottom-width: 1px; }
-.cfg-doc.cfg-tpl-moderna{ border-radius: 14px; }
-.cfg-doc.cfg-tpl-moderna .cfg-doc-title{ border-bottom: none; }
-.cfg-doc.cfg-tpl-clasica{ border: 2px solid var(--doc-encabezado); border-radius: 2px; }
-.cfg-doc.cfg-tpl-clasica .cfg-doc-table th,
-.cfg-doc.cfg-tpl-clasica .cfg-doc-table td{ border-color: rgba(0,0,0,0.25); }
-
 /* ---------- Pie del editor (Guardar / Cancelar) ---------- */
 
 .cfg-editor-foot{
@@ -4484,17 +4237,6 @@ select.cfg-input{ cursor: pointer; }
    RESPONSIVE — CONFIGURACIÓN GENERAL
    ========================================================== */
 
-@media (max-width: 1080px){
-    .cfg-editor-grid{
-        grid-template-columns: 1fr;
-    }
-
-    .cfg-preview-wrap{
-        position: static;
-        max-width: 440px;
-    }
-}
-
 @media (max-width: 768px){
     .cfg-root{
         max-height: none;
@@ -4503,14 +4245,6 @@ select.cfg-input{ cursor: pointer; }
     .cfg-form-grid{
         grid-template-columns: 1fr;
     }
-
-    .cfg-color-field{
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .cfg-color-control{ width: 100%; }
-    .cfg-color-hex{ flex: 1; }
 
     .cfg-logo-box{
         flex-direction: column;

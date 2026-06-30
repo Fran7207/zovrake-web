@@ -1356,21 +1356,8 @@ const RequerimientosDB = (function () {
         memoria:        "zovrake_req_memoria",
         actividad:      "zovrake_req_actividad",
         notificaciones: "zovrake_req_notificaciones",
-        documentos:     "zovrake_req_documentos",
-        obras:          "zovrake_obras"
+        documentos:     "zovrake_req_documentos"
     };
-
-    // Catálogo inicial de obras (proviene de "Configuración General";
-    // ese módulo lo administrará más adelante). Aporta valores por
-    // defecto para el autocompletado antes de que exista historial.
-    const OBRAS_SEED = [
-        { nombre: "Torre Norte",      lugarEntrega: "Almacén Central — Torre Norte",   requeridoPor: "C. Rivas", cargoRequerido: "Residente de Obra", recibidoPor: "J. Quispe", cargoRecibido: "Almacenero" },
-        { nombre: "Planta Sur",       lugarEntrega: "Almacén de Obra — Planta Sur",    requeridoPor: "M. Díaz",  cargoRequerido: "Residente de Obra", recibidoPor: "R. Loayza", cargoRecibido: "Logística" },
-        { nombre: "Puente Río",       lugarEntrega: "Frente de trabajo — Puente Río",  requeridoPor: "L. Pérez", cargoRequerido: "Ing. de Campo",    recibidoPor: "S. Núñez",  cargoRecibido: "Almacenero" },
-        { nombre: "Edificio Central", lugarEntrega: "Patio de maniobras — E. Central", requeridoPor: "C. Rivas", cargoRequerido: "Residente de Obra", recibidoPor: "J. Quispe", cargoRecibido: "Almacenero" },
-        { nombre: "Vía Expressa",     lugarEntrega: "Campamento — Vía Expressa",       requeridoPor: "A. Soto",  cargoRequerido: "Ing. Residente",   recibidoPor: "R. Loayza", cargoRecibido: "Logística" },
-        { nombre: "Almacén 4",        lugarEntrega: "Almacén 4",                       requeridoPor: "A. Soto",  cargoRequerido: "Supervisor",       recibidoPor: "S. Núñez",  cargoRecibido: "Almacenero" }
-    ];
 
     // --- Acceso seguro a localStorage (degrada sin romper) ---
 
@@ -1395,14 +1382,31 @@ const RequerimientosDB = (function () {
         return "rq-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
     }
 
-    // --- Obras (configuración) ---
+    // --- Obras (consultadas desde Configuración General) ---
+    //
+    // Única fuente de verdad: el módulo Configuración General. Aquí
+    // SOLO se consultan (nunca se crean ni modifican). Se devuelve la
+    // lista plana de obras activas con el contexto de su empresa.
 
     function obtenerObras() {
-        const obras = leer(K.obras, null);
-        if (!obras) {
-            escribir(K.obras, OBRAS_SEED);
-            return OBRAS_SEED.slice();
-        }
+        if (typeof ConfiguracionDB === "undefined") return [];
+
+        const obras = [];
+        ConfiguracionDB.catalogoObras().forEach((g) => {
+            g.obras.forEach((o) => {
+                obras.push({
+                    id: o.id,
+                    codigo: o.codigo,
+                    nombre: o.nombre,
+                    departamento: o.departamento,
+                    provincia: o.provincia,
+                    distrito: o.distrito,
+                    empresaId: g.empresaId,
+                    empresa: g.empresa,
+                    ruc: g.ruc
+                });
+            });
+        });
         return obras;
     }
 
@@ -2004,10 +2008,29 @@ const NuevoRequerimiento = (function () {
     }
 
     function render() {
-        const obras = RequerimientosDB.obtenerObras();
-        const opciones = obras
-            .map((o) => `<option value="${PanelUtils.escapar(o.nombre)}">${PanelUtils.escapar(o.nombre)}</option>`)
-            .join("");
+        // Las obras provienen de Configuración General (única fuente de
+        // verdad). Se agrupan por empresa y cada opción lleva el contexto
+        // de su empresa para identificarla automáticamente al seleccionar.
+        const grupos = (typeof ConfiguracionDB !== "undefined")
+            ? ConfiguracionDB.catalogoObras()
+            : [];
+        const hayObras = grupos.length > 0;
+
+        const opciones = grupos.map((g) => {
+            const ops = g.obras.map((o) =>
+                `<option value="${PanelUtils.escapar(o.nombre)}"`
+                + ` data-empresa-id="${PanelUtils.escapar(g.empresaId)}"`
+                + ` data-empresa="${PanelUtils.escapar(g.empresa)}"`
+                + ` data-ruc="${PanelUtils.escapar(g.ruc)}"`
+                + ` data-obra-id="${PanelUtils.escapar(o.id)}"`
+                + ` data-codigo="${PanelUtils.escapar(o.codigo)}">${PanelUtils.escapar(o.nombre)}</option>`
+            ).join("");
+            return `<optgroup label="${PanelUtils.escapar(g.empresa)}">${ops}</optgroup>`;
+        }).join("");
+
+        const placeholderObra = hayObras
+            ? "Selecciona una obra…"
+            : "No hay obras registradas en Configuración General";
 
         return `
         <form class="nr" id="nr-form" novalidate>
@@ -2031,11 +2054,13 @@ const NuevoRequerimiento = (function () {
                 <div class="nr-grid">
                     <div class="nr-field" data-field="obra">
                         <label class="nr-label" for="nr-obra">Obra <span class="nr-req">*</span></label>
-                        <select class="nr-input" id="nr-obra">
-                            <option value="">Selecciona una obra…</option>
+                        <select class="nr-input" id="nr-obra" ${hayObras ? "" : "disabled"}>
+                            <option value="">${placeholderObra}</option>
                             ${opciones}
                         </select>
+                        ${hayObras ? "" : '<span class="nr-hint-inline">Registre una obra en Configuración General para habilitar este campo.</span>'}
                         <span class="nr-error" hidden></span>
+                        <div class="nr-empresa-info" id="nr-empresa-info" hidden></div>
                     </div>
 
                     ${campo("partida", "Partida", { req: true, autocomplete: true })}
@@ -2235,9 +2260,35 @@ const NuevoRequerimiento = (function () {
         return el ? el.value.trim() : "";
     }
 
+    // Lee el contexto de empresa de la obra seleccionada (lo aporta
+    // Configuración General a través de los data-* de cada <option>).
+    // Así el expediente queda vinculado a su empresa sin que el usuario
+    // vuelva a escribir esos datos, y el futuro submódulo Documentos
+    // podrá resolver el logo en vivo con ConfiguracionDB.contextoEmpresa.
+    function contextoEmpresaSeleccionada(root) {
+        const sel = root.querySelector("#nr-obra");
+        const opt = sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+        if (!opt || !opt.value) {
+            return { empresaId: "", empresa: "", ruc: "", obraId: "", obraCodigo: "" };
+        }
+        return {
+            empresaId:  opt.dataset.empresaId || "",
+            empresa:    opt.dataset.empresa || "",
+            ruc:        opt.dataset.ruc || "",
+            obraId:     opt.dataset.obraId || "",
+            obraCodigo: opt.dataset.codigo || ""
+        };
+    }
+
     function recolectar(root) {
+        const ctx = contextoEmpresaSeleccionada(root);
         return {
             obra:               valor(root, "obra"),
+            empresaId:          ctx.empresaId,
+            empresa:            ctx.empresa,
+            ruc:                ctx.ruc,
+            obraId:             ctx.obraId,
+            obraCodigo:         ctx.obraCodigo,
             partida:            valor(root, "partida"),
             requeridoPor:       valor(root, "requeridoPor"),
             cargoRequerido:     valor(root, "cargoRequerido"),
@@ -2397,9 +2448,27 @@ const NuevoRequerimiento = (function () {
         adjuntos = [];
         pintarTabla(root);
 
-        // Obra -> autocompleta el resto de la Tarjeta 1.
+        // Obra -> autocompleta el resto de la Tarjeta 1 y muestra la
+        // empresa identificada automáticamente (empresa + RUC).
         const selObra = root.querySelector("#nr-obra");
+        const infoEmpresa = root.querySelector("#nr-empresa-info");
+
+        function mostrarEmpresaIdentificada() {
+            const ctx = contextoEmpresaSeleccionada(root);
+            if (!infoEmpresa) return;
+            if (ctx.empresa) {
+                infoEmpresa.hidden = false;
+                infoEmpresa.innerHTML =
+                    `Empresa identificada: <strong>${PanelUtils.escapar(ctx.empresa)}</strong>` +
+                    (ctx.ruc ? ` · RUC <strong>${PanelUtils.escapar(ctx.ruc)}</strong>` : "");
+            } else {
+                infoEmpresa.hidden = true;
+                infoEmpresa.innerHTML = "";
+            }
+        }
+
         selObra.addEventListener("change", () => {
+            mostrarEmpresaIdentificada();
             const d = RequerimientosDB.datosObra(selObra.value);
             const set = (id, v) => { const el = root.querySelector(`#nr-${id}`); if (el && !el.value) el.value = v || ""; };
             set("lugarEntrega", d.lugarEntrega);
@@ -2652,11 +2721,11 @@ const ReqWorkspace = (function () {
 /* ==========================================================
    MÓDULO "CONFIGURACIÓN GENERAL" — NÚCLEO DEL ERP
    ----------------------------------------------------------
-   Única fuente de verdad (Single Source of Truth) de la
-   identidad corporativa, las empresas y sus obras. Todos los
-   demás módulos (Requerimientos, Compras, Documentos,
-   Reportes, etc.) SOLO consultan esta información; nunca la
-   modifican. Así se evita por completo la duplicación de datos.
+   Única fuente de verdad (Single Source of Truth) de las
+   empresas y sus obras. Todos los demás módulos
+   (Requerimientos, Compras, Documentos, Reportes, etc.) SOLO
+   consultan esta información; nunca la modifican. Así se evita
+   por completo la duplicación de datos.
 
    Arquitectura (cada pieza, una sola responsabilidad):
 
@@ -2690,10 +2759,6 @@ const ReqWorkspace = (function () {
        ruc           text not null,
        estado        text not null default 'activa',
        logo          text,                 -- URL en Storage o dataURL
-       color_principal  text,
-       color_encabezado text,
-       color_tablas     text,
-       plantilla     text not null default 'corporativa',
        creado_en     timestamptz default now(),
        actualizado_en timestamptz default now()
      )
@@ -2745,16 +2810,6 @@ const ConfiguracionDB = (function () {
         );
     }
 
-    // Identidad corporativa por defecto (no son datos ficticios:
-    // son valores iniciales razonables que el usuario personaliza).
-    function identidadPorDefecto() {
-        return {
-            colorPrincipal: "#B68A2E",
-            colorEncabezado: "#26241E",
-            colorTablas: "#F0EEE6"
-        };
-    }
-
     // Normaliza una empresa para garantizar una forma estable
     // aunque el almacenamiento provenga de una versión anterior.
     function normalizar(empresa) {
@@ -2765,8 +2820,6 @@ const ConfiguracionDB = (function () {
             ruc: e.ruc || "",
             estado: e.estado === "inactiva" ? "inactiva" : "activa",
             logo: e.logo || null,
-            identidad: Object.assign(identidadPorDefecto(), e.identidad || {}),
-            plantilla: e.plantilla || "corporativa",
             obras: Array.isArray(e.obras) ? e.obras.map(normalizarObra) : [],
             creadoEn: e.creadoEn || new Date().toISOString(),
             actualizadoEn: e.actualizadoEn || new Date().toISOString()
@@ -2842,8 +2895,6 @@ const ConfiguracionDB = (function () {
             ruc: "",
             estado: "activa",
             logo: null,
-            identidad: identidadPorDefecto(),
-            plantilla: "corporativa",
             obras: [],
             creadoEn: null,
             actualizadoEn: null
@@ -2865,6 +2916,59 @@ const ConfiguracionDB = (function () {
         };
     }
 
+    /* --- Lectura para OTROS módulos (solo consulta, síncrona) ---
+       Estos accesores permiten que módulos como Nuevo Requerimiento
+       o el futuro Documentos consulten las obras y los datos de
+       empresa registrados, sin duplicar información. Son síncronos
+       porque hoy leen de localStorage; al migrar a Supabase basta
+       con alimentar una caché en memoria desde la capa asíncrona y
+       estos métodos seguirán sirviendo a los consumidores. */
+
+    // Catálogo de obras para selección, agrupado por empresa.
+    // Por defecto solo incluye empresas y obras ACTIVAS.
+    function catalogoObras(opciones) {
+        const incluirInactivas = !!(opciones && opciones.incluirInactivas);
+        return leerTodo()
+            .map(normalizar)
+            .filter((e) => incluirInactivas || e.estado === "activa")
+            .map((e) => ({
+                empresaId: e.id,
+                empresa: e.nombre,
+                ruc: e.ruc,
+                logo: e.logo,
+                obras: e.obras.filter((o) => incluirInactivas || o.estado === "activa")
+            }))
+            .filter((g) => g.obras.length > 0);
+    }
+
+    // ¿Existe al menos una obra activa registrada?
+    function hayObrasRegistradas() {
+        return catalogoObras().length > 0;
+    }
+
+    // Contexto de empresa (nombre, RUC, logo) a partir de su id.
+    // Lo usará el submódulo Documentos para resolver el logo en vivo
+    // sin guardar copias del mismo en cada expediente.
+    function contextoEmpresa(empresaId) {
+        const e = leerTodo().map(normalizar).find((x) => x.id === empresaId);
+        if (!e) return null;
+        return { id: e.id, nombre: e.nombre, ruc: e.ruc, logo: e.logo };
+    }
+
+    // Contexto completo (empresa + obra) a partir de los ids.
+    function contextoObra(empresaId, obraId) {
+        const e = leerTodo().map(normalizar).find((x) => x.id === empresaId);
+        if (!e) return null;
+        const obra = e.obras.find((o) => o.id === obraId) || null;
+        return {
+            empresaId: e.id,
+            empresa: e.nombre,
+            ruc: e.ruc,
+            logo: e.logo,
+            obra
+        };
+    }
+
     return {
         listarEmpresas,
         obtenerEmpresa,
@@ -2873,52 +2977,24 @@ const ConfiguracionDB = (function () {
         cambiarEstadoEmpresa,
         nuevaEmpresa,
         nuevaObra,
-        identidadPorDefecto
+        catalogoObras,
+        hayObrasRegistradas,
+        contextoEmpresa,
+        contextoObra
     };
 })();
-
-/* --------------------------------------------------------
-   CATÁLOGO DE PLANTILLAS CORPORATIVAS
-   --------------------------------------------------------
-   Define la identidad visual que heredarán automáticamente
-   los documentos oficiales (Requerimientos, Órdenes de
-   Compra, Órdenes de Pago, Reportes). Cada empresa elige una.
-   -------------------------------------------------------- */
-
-const PLANTILLAS_CORPORATIVAS = Object.freeze([
-    {
-        id: "corporativa",
-        nombre: "Corporativa",
-        descripcion: "Equilibrada y formal. Encabezado sólido con bloque de datos.",
-    },
-    {
-        id: "ejecutiva",
-        nombre: "Ejecutiva",
-        descripcion: "Sobria y directa. Franja superior fina y tipografía contenida.",
-    },
-    {
-        id: "moderna",
-        nombre: "Moderna",
-        descripcion: "Limpia y espaciosa. Acentos de color y bordes suaves.",
-    },
-    {
-        id: "clasica",
-        nombre: "Clásica",
-        descripcion: "Tradicional. Marco completo y líneas marcadas.",
-    }
-]);
 
 /* --------------------------------------------------------
    COMPONENTE DE INTERFAZ: ConfiguracionGeneral
    --------------------------------------------------------
    Controla dos vistas dentro de #cfg-root:
-     • Lista de Configuraciones Empresariales.
-     • Editor de una configuración (Empresa, Obras, Identidad,
-       Plantilla) con Vista Previa en vivo y "Guardar".
+     • Lista de empresas registradas.
+     • Editor de una empresa (datos de Empresa + Obras) y
+       "Guardar".
 
    Renderizado quirúrgico: los campos de texto no re-renderizan
    el formulario (no se pierde el foco); solo se actualiza la
-   zona afectada (logo, obras, plantilla o vista previa).
+   zona afectada (logo u obras).
    -------------------------------------------------------- */
 
 const ConfiguracionGeneral = (function () {
@@ -2929,7 +3005,7 @@ const ConfiguracionGeneral = (function () {
         vista: "lista",      // "lista" | "editor"
         empresa: null,       // borrador en edición (copia de trabajo)
         esNuevo: false,
-        tab: "empresa",      // empresa | obras | identidad | plantilla
+        tab: "empresa",      // empresa | obras
         obraEnEdicion: null  // id de la obra que se está editando, o null
     };
 
@@ -2961,8 +3037,6 @@ const ConfiguracionGeneral = (function () {
     const ICONOS = {
         empresa: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20.5h16"/><path d="M6 20.5V5.5A1.5 1.5 0 0 1 7.5 4h6A1.5 1.5 0 0 1 15 5.5v15"/><path d="M15 9h2.5A1.5 1.5 0 0 1 19 10.5v10"/><path d="M9 8h3M9 11.5h3M9 15h3"/></svg>',
         obras: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V8l5-3 5 3v13"/><path d="M15 21V11l4 2.2V21"/><path d="M8.5 9.5h0M8.5 13h0M8.5 16.5h0"/></svg>',
-        identidad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="13.5" cy="17.5" r="2.5"/><path d="M9 12h6"/><path d="M11.3 7.7 8.7 10.8M11.3 16.3 8.7 13.2"/></svg>',
-        plantilla: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16"/><path d="M9 9v11"/></svg>',
         mas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
         editar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10a2 2 0 0 0-2.8-2.8L5 17.2V20Z"/><path d="m13.5 6.5 4 4"/></svg>',
         eliminar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6 7v12.5A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7"/><path d="M10 11v6M14 11v6"/></svg>',
@@ -2982,7 +3056,7 @@ const ConfiguracionGeneral = (function () {
         return `
             <article class="cfg-card" data-cfg-empresa="${esc(empresa.id)}">
                 <div class="cfg-card-top">
-                    <div class="cfg-card-logo" style="--cfg-card-accent:${esc(empresa.identidad.colorPrincipal)}">
+                    <div class="cfg-card-logo">
                         ${logo}
                     </div>
                     <span class="cfg-badge ${activa ? "is-activa" : "is-inactiva"}">
@@ -2999,7 +3073,7 @@ const ConfiguracionGeneral = (function () {
                 </div>
 
                 <div class="cfg-card-actions">
-                    <button class="cfg-btn cfg-btn-primary" type="button" data-cfg-action="editar" data-id="${esc(empresa.id)}">Configurar</button>
+                    <button class="cfg-btn cfg-btn-primary" type="button" data-cfg-action="editar" data-id="${esc(empresa.id)}">Editar</button>
                     <button class="cfg-btn cfg-btn-ghost" type="button" data-cfg-action="toggle-estado" data-id="${esc(empresa.id)}">
                         ${activa ? "Desactivar" : "Activar"}
                     </button>
@@ -3016,13 +3090,14 @@ const ConfiguracionGeneral = (function () {
             : `
                 <div class="cfg-empty">
                     <div class="cfg-empty-icon">${ICONOS.empresa}</div>
-                    <h3 class="cfg-empty-title">Aún no hay configuraciones empresariales</h3>
+                    <h3 class="cfg-empty-title">Comience registrando su primera empresa</h3>
                     <p class="cfg-empty-text">
-                        Crea la primera configuración para registrar la empresa, sus obras
-                        y su identidad corporativa. Será la única fuente oficial para todo el ERP.
+                        Registre la información de la empresa y las obras con las que trabajará.
+                        Esta configuración permitirá que el ERP complete automáticamente la
+                        información en los diferentes procesos y documentos del sistema.
                     </p>
                     <button class="cfg-btn cfg-btn-primary" type="button" data-cfg-action="nueva">
-                        ${ICONOS.mas} Crear configuración empresarial
+                        ${ICONOS.mas} Registrar empresa
                     </button>
                 </div>`;
 
@@ -3031,13 +3106,14 @@ const ConfiguracionGeneral = (function () {
                 <div>
                     <h2 class="dashboard-view-title">Configuración General</h2>
                     <p class="cfg-subtitle">
-                        Núcleo del ERP. Administra aquí las empresas, sus obras y su identidad
-                        corporativa. El resto de módulos solo consultará esta información.
+                        Configure la información principal de su organización para que el ERP pueda
+                        automatizar correctamente los procesos, documentos y operaciones de cada una
+                        de sus obras.
                     </p>
                 </div>
                 ${empresas.length ? `
                 <button class="cfg-btn cfg-btn-primary" type="button" data-cfg-action="nueva">
-                    ${ICONOS.mas} Nueva configuración
+                    ${ICONOS.mas} Registrar empresa
                 </button>` : ""}
             </header>
 
@@ -3053,8 +3129,8 @@ const ConfiguracionGeneral = (function () {
     function vistaEditorHTML() {
         const e = estado.empresa;
         const titulo = estado.esNuevo
-            ? "Nueva configuración empresarial"
-            : (e.nombre || "Configuración empresarial");
+            ? "Registrar empresa"
+            : (e.nombre || "Editar empresa");
 
         return `
             <header class="cfg-editor-head">
@@ -3063,7 +3139,7 @@ const ConfiguracionGeneral = (function () {
                 </button>
                 <div class="cfg-editor-titles">
                     <h2 class="dashboard-view-title">${esc(titulo)}</h2>
-                    <p class="cfg-subtitle">Completa la información y guarda. Los cambios se aplicarán a todos los documentos de esta empresa.</p>
+                    <p class="cfg-subtitle">Complete los datos de la empresa y registre sus obras. El ERP usará esta información de forma automática.</p>
                 </div>
             </header>
 
@@ -3072,26 +3148,16 @@ const ConfiguracionGeneral = (function () {
                     <nav class="cfg-tabs zv-no-scrollbar" id="cfg-tabs">
                         <button class="cfg-tab" type="button" data-cfg-tab="empresa">${ICONOS.empresa}<span>Empresa</span></button>
                         <button class="cfg-tab" type="button" data-cfg-tab="obras">${ICONOS.obras}<span>Obras</span></button>
-                        <button class="cfg-tab" type="button" data-cfg-tab="identidad">${ICONOS.identidad}<span>Identidad</span></button>
-                        <button class="cfg-tab" type="button" data-cfg-tab="plantilla">${ICONOS.plantilla}<span>Plantilla</span></button>
                     </nav>
                     <div class="cfg-tab-panel" id="cfg-tab-panel"></div>
                 </div>
-
-                <aside class="cfg-preview-wrap">
-                    <div class="cfg-preview-head">
-                        <span>Vista previa</span>
-                        <span class="cfg-preview-hint">Se actualiza en vivo</span>
-                    </div>
-                    <div class="cfg-preview" id="cfg-preview"></div>
-                </aside>
             </div>
 
             <footer class="cfg-editor-foot">
                 <span class="cfg-foot-msg" id="cfg-foot-msg"></span>
                 <div class="cfg-foot-actions">
                     <button class="cfg-btn cfg-btn-ghost" type="button" data-cfg-action="volver">Cancelar</button>
-                    <button class="cfg-btn cfg-btn-primary" type="button" data-cfg-action="guardar">Guardar Configuración</button>
+                    <button class="cfg-btn cfg-btn-primary" type="button" data-cfg-action="guardar">Guardar</button>
                 </div>
             </footer>`;
     }
@@ -3114,7 +3180,7 @@ const ConfiguracionGeneral = (function () {
                     ${e.logo ? "Reemplazar imagen" : "Subir imagen"}
                 </button>
                 ${e.logo ? `<button class="cfg-btn cfg-btn-ghost" type="button" data-cfg-action="logo-eliminar">Eliminar</button>` : ""}
-                <p class="cfg-hint">PNG, JPG o SVG. Máximo 1.5 MB.</p>
+                <p class="cfg-hint">Formatos PNG, JPG o SVG (máx. 1.5 MB). El logo se ajustará automáticamente conservando su proporción; no necesita modificar su tamaño.</p>
             </div>`;
     }
 
@@ -3253,107 +3319,6 @@ const ConfiguracionGeneral = (function () {
             </div>`;
     }
 
-    /* ---------- TAB: IDENTIDAD CORPORATIVA ---------- */
-
-    function tabIdentidadHTML() {
-        const id = estado.empresa.identidad;
-        const campo = (clave, etiqueta, descripcion) => `
-            <div class="cfg-color-field">
-                <div class="cfg-color-info">
-                    <span class="cfg-label">${etiqueta}</span>
-                    <p class="cfg-hint">${descripcion}</p>
-                </div>
-                <div class="cfg-color-control">
-                    <input class="cfg-color-input" type="color" data-cfg-color="${clave}" value="${esc(id[clave])}">
-                    <input class="cfg-input cfg-color-hex" type="text" data-cfg-color-hex="${clave}" value="${esc(id[clave])}" maxlength="7">
-                </div>
-            </div>`;
-
-        return `
-            <div class="cfg-section">
-                <h3 class="cfg-section-title">Identidad corporativa</h3>
-                <p class="cfg-hint">Estos colores se aplicarán automáticamente a Requerimientos, Órdenes de Compra, Órdenes de Pago, Documentos y Reportes.</p>
-
-                <div class="cfg-color-list">
-                    ${campo("colorPrincipal", "Color principal", "Color de marca y elementos destacados.")}
-                    ${campo("colorEncabezado", "Color del encabezado", "Fondo del encabezado de los documentos.")}
-                    ${campo("colorTablas", "Color de tablas", "Fondo de las cabeceras de tabla.")}
-                </div>
-            </div>`;
-    }
-
-    /* ---------- TAB: PLANTILLA CORPORATIVA ---------- */
-
-    function tabPlantillaHTML() {
-        const seleccionada = estado.empresa.plantilla;
-        const tarjetas = PLANTILLAS_CORPORATIVAS.map((p) => `
-            <button class="cfg-plantilla ${p.id === seleccionada ? "is-selected" : ""}" type="button" data-cfg-plantilla="${p.id}">
-                <span class="cfg-plantilla-mini cfg-tpl-${p.id}">
-                    <span class="cfg-plantilla-mini-head"></span>
-                    <span class="cfg-plantilla-mini-line"></span>
-                    <span class="cfg-plantilla-mini-line short"></span>
-                </span>
-                <span class="cfg-plantilla-name">${esc(p.nombre)}</span>
-                <span class="cfg-plantilla-desc">${esc(p.descripcion)}</span>
-            </button>`).join("");
-
-        return `
-            <div class="cfg-section">
-                <h3 class="cfg-section-title">Plantilla corporativa</h3>
-                <p class="cfg-hint">Selecciona una plantilla. Todos los documentos de esta empresa la usarán automáticamente.</p>
-                <div class="cfg-plantilla-grid">
-                    ${tarjetas}
-                </div>
-            </div>`;
-    }
-
-    /* ---------- VISTA PREVIA EN VIVO ---------- */
-
-    function previewHTML() {
-        const e = estado.empresa;
-        const id = e.identidad;
-        const plantilla = PLANTILLAS_CORPORATIVAS.find((p) => p.id === e.plantilla);
-        const obrasMostrar = e.obras.filter((o) => o.estado === "activa").slice(0, 3);
-        const logo = e.logo
-            ? `<img src="${esc(e.logo)}" alt="Logo">`
-            : `<span class="cfg-doc-logo-fallback">${esc((e.nombre || "Z").charAt(0).toUpperCase())}</span>`;
-
-        const filasObra = obrasMostrar.length
-            ? obrasMostrar.map((o, i) => `
-                <tr>
-                    <td>${i + 1}</td>
-                    <td>${esc(o.nombre) || "Obra sin nombre"}</td>
-                    <td>${esc(o.distrito || o.provincia || o.departamento) || "—"}</td>
-                </tr>`).join("")
-            : `<tr><td>1</td><td>Ejemplo de partida</td><td>—</td></tr>`;
-
-        return `
-            <div class="cfg-doc cfg-tpl-${esc(e.plantilla)}" style="--doc-principal:${esc(id.colorPrincipal)};--doc-encabezado:${esc(id.colorEncabezado)};--doc-tablas:${esc(id.colorTablas)}">
-                <div class="cfg-doc-header">
-                    <div class="cfg-doc-logo">${logo}</div>
-                    <div class="cfg-doc-empresa">
-                        <strong>${esc(e.nombre) || "Nombre de la empresa"}</strong>
-                        <span>RUC: ${esc(e.ruc) || "—"}</span>
-                    </div>
-                    <div class="cfg-doc-tipo">Documento oficial</div>
-                </div>
-
-                <div class="cfg-doc-body">
-                    <h4 class="cfg-doc-title">ORDEN DE COMPRA</h4>
-                    <table class="cfg-doc-table">
-                        <thead>
-                            <tr><th>#</th><th>Descripción</th><th>Ubicación</th></tr>
-                        </thead>
-                        <tbody>${filasObra}</tbody>
-                    </table>
-                </div>
-
-                <div class="cfg-doc-foot">
-                    Plantilla ${esc(plantilla ? plantilla.nombre : "")}
-                </div>
-            </div>`;
-    }
-
     /* ====================================================
        RENDERIZADO (general y quirúrgico)
        ==================================================== */
@@ -3366,10 +3331,8 @@ const ConfiguracionGeneral = (function () {
 
     function contenidoTab() {
         switch (estado.tab) {
-            case "obras":     return tabObrasHTML();
-            case "identidad": return tabIdentidadHTML();
-            case "plantilla": return tabPlantillaHTML();
-            default:          return tabEmpresaHTML();
+            case "obras": return tabObrasHTML();
+            default:      return tabEmpresaHTML();
         }
     }
 
@@ -3377,11 +3340,6 @@ const ConfiguracionGeneral = (function () {
         const panel = document.getElementById("cfg-tab-panel");
         if (panel) panel.innerHTML = contenidoTab();
         pintarTabActiva();
-    }
-
-    function pintarPreview() {
-        const prev = document.getElementById("cfg-preview");
-        if (prev) prev.innerHTML = previewHTML();
     }
 
     function pintarLogo() {
@@ -3409,7 +3367,6 @@ const ConfiguracionGeneral = (function () {
         if (estado.vista === "editor") {
             cont.innerHTML = vistaEditorHTML();
             pintarTab();
-            pintarPreview();
         } else {
             const empresas = await ConfiguracionDB.listarEmpresas();
             cont.innerHTML = vistaListaHTML(empresas);
@@ -3424,7 +3381,7 @@ const ConfiguracionGeneral = (function () {
 
     function abrirEditor(empresa, esNuevo) {
         // Copia profunda para trabajar sobre un borrador y no mutar
-        // el almacenamiento hasta pulsar "Guardar Configuración".
+        // el almacenamiento hasta pulsar "Guardar".
         estado.empresa = JSON.parse(JSON.stringify(empresa));
         estado.esNuevo = !!esNuevo;
         estado.vista = "editor";
@@ -3452,7 +3409,7 @@ const ConfiguracionGeneral = (function () {
 
     async function eliminarConfiguracion(id) {
         const empresa = await ConfiguracionDB.obtenerEmpresa(id);
-        const nombre = empresa ? (empresa.nombre || "esta configuración") : "esta configuración";
+        const nombre = empresa ? (empresa.nombre || "esta empresa") : "esta empresa";
         if (!confirm(`¿Eliminar "${nombre}"? Esta acción no se puede deshacer.`)) return;
         await ConfiguracionDB.eliminarEmpresa(id);
         render();
@@ -3461,7 +3418,7 @@ const ConfiguracionGeneral = (function () {
     function volverALista() {
         const e = estado.empresa;
         const conDatos = e && (e.nombre || e.ruc || e.logo || e.obras.length);
-        if (estado.esNuevo && conDatos && !confirm("¿Descartar esta configuración sin guardar?")) {
+        if (estado.esNuevo && conDatos && !confirm("¿Descartar los datos sin guardar?")) {
             return;
         }
         estado.vista = "lista";
@@ -3488,7 +3445,7 @@ const ConfiguracionGeneral = (function () {
         const guardada = await ConfiguracionDB.guardarEmpresa(e);
         estado.empresa = JSON.parse(JSON.stringify(guardada));
         estado.esNuevo = false;
-        mensajePie("Configuración guardada correctamente.", "ok");
+        mensajePie("Empresa guardada correctamente.", "ok");
 
         // Tras guardar, regresa a la lista para reflejar el cambio.
         setTimeout(() => {
@@ -3521,7 +3478,6 @@ const ConfiguracionGeneral = (function () {
         lector.onload = () => {
             estado.empresa.logo = lector.result;
             pintarLogo();
-            pintarPreview();
             mensajePie("");
         };
         lector.onerror = () => mensajePie("No se pudo leer la imagen.", "error");
@@ -3531,7 +3487,6 @@ const ConfiguracionGeneral = (function () {
     function eliminarLogo() {
         estado.empresa.logo = null;
         pintarLogo();
-        pintarPreview();
     }
 
     /* ---------- Obras ---------- */
@@ -3562,7 +3517,6 @@ const ConfiguracionGeneral = (function () {
         estado.empresa.obras.push(obra);
         estado.obraEnEdicion = null;
         pintarTab();        // limpia el formulario y repinta la tabla
-        pintarPreview();
         mensajePie("");
     }
 
@@ -3576,7 +3530,6 @@ const ConfiguracionGeneral = (function () {
         if (obra) Object.assign(obra, datos);
         estado.obraEnEdicion = null;
         pintarTab();
-        pintarPreview();
         mensajePie("");
     }
 
@@ -3594,7 +3547,6 @@ const ConfiguracionGeneral = (function () {
         const obra = estado.empresa.obras.find((o) => o.id === id);
         if (obra) obra.estado = obra.estado === "activa" ? "inactiva" : "activa";
         pintarObras();
-        pintarPreview();
     }
 
     function eliminarObra(id) {
@@ -3605,17 +3557,6 @@ const ConfiguracionGeneral = (function () {
         } else {
             pintarObras();
         }
-        pintarPreview();
-    }
-
-    /* ---------- Plantilla ---------- */
-
-    function seleccionarPlantilla(id) {
-        estado.empresa.plantilla = id;
-        document.querySelectorAll(".cfg-plantilla").forEach((c) => {
-            c.classList.toggle("is-selected", c.dataset.cfgPlantilla === id);
-        });
-        pintarPreview();
     }
 
     /* ====================================================
@@ -3629,13 +3570,6 @@ const ConfiguracionGeneral = (function () {
             estado.tab = tab.dataset.cfgTab;
             estado.obraEnEdicion = null;
             pintarTab();
-            return;
-        }
-
-        // Selección de plantilla.
-        const plantilla = evento.target.closest("[data-cfg-plantilla]");
-        if (plantilla) {
-            seleccionarPlantilla(plantilla.dataset.cfgPlantilla);
             return;
         }
 
@@ -3665,46 +3599,19 @@ const ConfiguracionGeneral = (function () {
         if (acciones[accion]) acciones[accion]();
     }
 
-    // Campos de texto/selección: actualizan el borrador SIN repintar
-    // el formulario (no se pierde el foco). Solo refrescan la vista
-    // previa cuando el campo influye en ella.
+    // Campos de texto/selección de la empresa: actualizan el borrador
+    // SIN repintar el formulario (no se pierde el foco al escribir).
     function manejarEntrada(evento) {
         const campo = evento.target.closest("[data-cfg-field]");
-        if (campo && estado.empresa) {
-            const clave = campo.dataset.cfgField;
-            let valor = campo.value;
-            if (clave === "ruc") {
-                valor = valor.replace(/\D/g, "").slice(0, 11);
-                if (campo.value !== valor) campo.value = valor;
-            }
-            estado.empresa[clave] = valor;
-            pintarPreview();
-            return;
-        }
+        if (!campo || !estado.empresa) return;
 
-        // Color (selector visual) -> sincroniza el campo hex y la vista previa.
-        const color = evento.target.closest("[data-cfg-color]");
-        if (color && estado.empresa) {
-            const clave = color.dataset.cfgColor;
-            estado.empresa.identidad[clave] = color.value;
-            const hex = document.querySelector(`[data-cfg-color-hex="${clave}"]`);
-            if (hex) hex.value = color.value;
-            pintarPreview();
-            return;
+        const clave = campo.dataset.cfgField;
+        let valor = campo.value;
+        if (clave === "ruc") {
+            valor = valor.replace(/\D/g, "").slice(0, 11);
+            if (campo.value !== valor) campo.value = valor;
         }
-
-        // Color (campo hexadecimal manual).
-        const hex = evento.target.closest("[data-cfg-color-hex]");
-        if (hex && estado.empresa) {
-            const clave = hex.dataset.cfgColorHex;
-            const valor = hex.value.trim();
-            if (/^#[0-9a-fA-F]{6}$/.test(valor)) {
-                estado.empresa.identidad[clave] = valor;
-                const picker = document.querySelector(`[data-cfg-color="${clave}"]`);
-                if (picker) picker.value = valor;
-                pintarPreview();
-            }
-        }
+        estado.empresa[clave] = valor;
     }
 
     /* ====================================================
