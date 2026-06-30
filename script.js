@@ -2706,45 +2706,45 @@ const ConfiguracionGeneral = (function () {
 
 const Documentos = (function () {
 
-    /* ---------- Estado de trabajo (vive en sesión) ---------- */
+    /* ====== Estado de sesión (no se persiste como historial) ====== */
+    let seleccionId = null;       // expediente activo en el administrador
+    let abiertoId = null;         // expediente abierto en el Editor Profesional
+    let docActual = null;         // modelo editable del documento en curso
+    let expActual = null;         // expediente abierto en el editor
+    let undoStack = [];
+    let redoStack = [];
+    let snapshotPendiente = null; // snapshot capturado al entrar a un campo
+    let autosaveTimer = null;
+    let calidadTimer = null;
+    let estadoGuardado = "guardado"; // "guardado" | "guardando" | "pendiente"
+    let menuDescarga = false;       // menú de descarga del editor
+    let menuDescargaDet = false;    // menú de descarga del panel de acciones
+    let calidadColapsada = false;
+    let resize = null;              // estado del redimensionado de columna
 
-    let seleccionId = null;   // id del expediente abierto
-    let docActual = null;     // modelo editable del documento en curso
-    let undoStack = [];       // pila de deshacer (snapshots JSON)
-    let redoStack = [];       // pila de rehacer
-    let snapshotPendiente = null; // estado capturado al empezar a editar un campo
-    let modo = "edicion";     // "edicion" | "preview"
-    let panel = null;         // null | "calidad" | "historial"
-    let menuDescargaAbierto = false;
-
-    /* ---------- Catálogo de estados (8 estados del flujo) ---------- */
-
+    /* ====== Estados del ciclo de vida (solo activos + enviado) ====== */
     const ESTADOS = {
-        "borrador":          { label: "Borrador",            emoji: "🟡", clase: "borrador" },
-        "en-edicion":        { label: "En edición",          emoji: "🔵", clase: "edicion" },
-        "listo":             { label: "Listo para envío",    emoji: "🟢", clase: "listo" },
-        "enviado-logistica": { label: "Enviado a Logística", emoji: "🟣", clase: "enviado" },
-        "en-revision":       { label: "En revisión",         emoji: "🟠", clase: "revision" },
-        "aprobado":          { label: "Aprobado",            emoji: "✅", clase: "aprobado" },
-        "observado":         { label: "Observado",           emoji: "🔴", clase: "observado" },
-        "cerrado":           { label: "Cerrado",             emoji: "⚫", clase: "cerrado" }
+        "en-edicion":        { label: "En edición",          clase: "edicion" },
+        "listo":             { label: "Listo para envío",    clase: "listo" },
+        "observado":         { label: "Con observaciones",   clase: "observado" },
+        "enviado-logistica": { label: "Enviado a Logística", clase: "enviado" }
     };
 
-    // Traduce el estado base del expediente (que alimenta el Panel) al
-    // estado del ciclo de vida del Documento, sin alterar el Panel.
     function estadoDoc(exp) {
         if (exp.docEstado && ESTADOS[exp.docEstado]) return exp.docEstado;
-        const mapa = {
-            borrador: "borrador", enviado: "listo", observado: "observado",
-            aprobado: "aprobado", rechazado: "observado", cerrado: "cerrado"
-        };
-        return mapa[exp.estado] || "listo";
+        return "listo";
     }
 
-    /* ---------- Utilidades ---------- */
-
+    /* ====== Utilidades ====== */
     const esc = (t) => PanelUtils.escapar(t == null ? "" : t);
     const clon = (o) => JSON.parse(JSON.stringify(o));
+
+    // Extrae texto plano de un fragmento HTML (campos enriquecidos).
+    function txt(html) {
+        const d = document.createElement("div");
+        d.innerHTML = html == null ? "" : String(html);
+        return (d.textContent || "").replace(/\u00a0/g, " ").trim();
+    }
 
     function fechaHora(ms) {
         if (!ms) return "—";
@@ -2752,22 +2752,24 @@ const Documentos = (function () {
         return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     }
 
-    function root() {
-        return document.querySelector("#doc-container");
+    function usuarioActual() {
+        return (typeof obtenerNombreGuardado === "function" && obtenerNombreGuardado()) || "Usuario";
     }
 
-    function bloqueado(exp) {
-        return !!exp && !!exp.bloqueado;
+    function rootAdmin() { return document.querySelector("#dx-root"); }
+    function rootEditor() { return document.querySelector("#dx-editor"); }
+    function sheetEl() { return document.querySelector("#dx-sheet"); }
+
+    /* ====== Acceso a expedientes ACTIVOS ====== */
+    // Activos = con Expediente Digital y aún NO enviados a Logística.
+    // Los enviados pertenecen al módulo Archivo (este submódulo no los muestra).
+    function activosBase() {
+        return RequerimientosDB.listarExpedientes()
+            .filter((e) => e.estado !== "borrador" && !e.enviadoLogistica);
     }
 
-    /* ---------- Acceso a expedientes (solo lectura/edición) ---------- */
-
-    // Expedientes que ya tienen Expediente Digital (no borradores) y,
-    // por tanto, son editables aquí. Asigna Nº de Expediente si falta.
-    function listarParaDocumentos() {
-        const lista = RequerimientosDB.listarExpedientes()
-            .filter((e) => e.estado !== "borrador");
-
+    function listarActivos() {
+        const lista = activosBase();
         let cambios = false;
         lista.forEach((e) => {
             if (!e.expCodigo) {
@@ -2776,868 +2778,1370 @@ const Documentos = (function () {
                 cambios = true;
             }
         });
-        // Si se asignaron códigos, releer para reflejar el orden real.
-        return cambios
-            ? RequerimientosDB.listarExpedientes().filter((e) => e.estado !== "borrador")
-            : lista;
+        return cambios ? activosBase() : lista;
     }
 
-    /* ---------- Construcción del modelo de documento ---------- */
+    /* ====== Modelo de documento (construcción automática) ====== */
 
-    // Crea el modelo editable a partir del Expediente Digital + la
-    // Configuración General. Es lo que hace "Regenerar Documento".
+    function columnasPorDefecto() {
+        return [
+            { id: "um",            titulo: "Unidad",                 ancho: 84,  align: "center" },
+            { id: "cantidad",      titulo: "Cantidad",               ancho: 96,  align: "center" },
+            { id: "descripcion",   titulo: "Descripción del material", ancho: 0, align: "left" },
+            { id: "observaciones", titulo: "Observaciones",          ancho: 0,   align: "left" }
+        ];
+    }
+
+    // Construye el modelo editable desde el Expediente Digital + Config.
+    // Los campos de texto se guardan como HTML (negrita/cursiva/subrayado).
     function construirDoc(exp) {
         const cfg = ConfiguracionGeneral.obtener();
         return {
-            // Identidad (solo presentación; el origen es Configuración General).
+            __v: 2,
             logoUrl: cfg.logoUrl || "",
             logoPos: "left",
-            logoSize: 64,
-            // Textos editables.
-            titulo: "REQUERIMIENTO DE MATERIALES",
-            subtitulo: exp.partida || "",
-            encabezado: cfg.empresa,
-            pie: `Documento generado en ZOVRAKE — ${cfg.empresa} · RUC ${cfg.ruc}`,
-            observaciones: exp.observacionesGenerales || "",
-            lugarEntrega: exp.lugarEntrega || "",
-            // Formato.
+            logoSize: 60,
+            empresa: esc(cfg.empresa),
+            ruc: esc(cfg.ruc),
+            direccion: esc(cfg.direccion),
+            nombreDoc: esc("REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS"),
+            subtitulo: esc(exp.partida || ""),
+            dg: {
+                obra: esc(exp.obra || ""),
+                partida: esc(exp.partida || ""),
+                requeridoPor: esc(exp.requeridoPor || ""),
+                cargoRequerido: esc(exp.cargoRequerido || ""),
+                recibidoPor: esc(exp.recibidoPor || ""),
+                cargoRecibido: esc(exp.cargoRecibido || ""),
+                fecha: esc(exp.fecha || ""),
+                fechaMaxima: esc(exp.fechaMaxima || "")
+            },
             colorPrimario: cfg.colorPrimario,
             colorTexto: cfg.colorTexto,
+            colorBorde: "#c9c6bd",
+            bordeAncho: 1,
             fuente: cfg.fuente,
-            alinear: "left",
-            margen: 32,
-            // Tabla institucional (orden de columnas del documento oficial).
+            fontSize: 13,
+            interlineado: 1.5,
+            alinearTitulo: "center",
+            margen: 36,
+            columnas: columnasPorDefecto(),
             filas: (exp.materiales || []).map((m) => ({
-                um: m.um || "",
-                cantidad: m.cantidad || "",
-                descripcion: m.descripcion || "",
-                fechaMax: exp.fechaMaxima || "",
-                observaciones: m.observaciones || ""
+                um: esc(m.um || ""),
+                cantidad: esc(m.cantidad || ""),
+                descripcion: esc(m.descripcion || ""),
+                observaciones: esc(m.observaciones || "")
             })),
-            // Firmas (provienen del expediente).
+            observaciones: esc(exp.observacionesGenerales || ""),
+            lugarEntrega: esc(exp.lugarEntrega || ""),
             firmas: [
-                { rol: "Requerido por", nombre: exp.requeridoPor || "", cargo: exp.cargoRequerido || "" },
-                { rol: "Recibido por", nombre: exp.recibidoPor || "", cargo: exp.cargoRecibido || "" }
+                { rol: esc("Usuario"),  nombre: esc(usuarioActual()) },
+                { rol: esc("Gerencia"), nombre: "" },
+                { rol: esc("Jefe de Logística"), nombre: "" }
             ]
         };
     }
 
-    /* ---------- RENDER: shell completo del submódulo ---------- */
+    // Devuelve el documento del expediente (migra esquemas antiguos).
+    function obtenerDoc(exp) {
+        if (exp && exp.documento && exp.documento.__v === 2) {
+            const d = clon(exp.documento);
+            if (!Array.isArray(d.columnas) || !d.columnas.length) d.columnas = columnasPorDefecto();
+            if (!Array.isArray(d.filas)) d.filas = [];
+            if (!Array.isArray(d.firmas)) d.firmas = construirDoc(exp).firmas;
+            if (!d.dg) d.dg = construirDoc(exp).dg;
+            return d;
+        }
+        return construirDoc(exp);
+    }
+
+    /* ============================================================
+       ADMINISTRADOR DE EXPEDIENTES ACTIVOS
+       ------------------------------------------------------------
+       Lista limpia agrupada por obra + panel de acciones. NO abre
+       el editor al seleccionar: primero muestra Vista previa y
+       acciones. Solo "Editar" abre el Editor Profesional.
+       ============================================================ */
 
     function render(params) {
-        const lista = listarParaDocumentos();
+        // Si quedó un editor abierto de una sesión anterior, lo retira.
+        descartarEditor();
 
-        // Selección inicial: por parámetro, o el primero disponible.
+        const lista = listarActivos();
+
         if (params && params.codigo) {
             const enc = lista.find((e) => e.codigo === params.codigo || e.expCodigo === params.codigo);
-            seleccionId = enc ? enc.id : (lista[0] && lista[0].id);
-        } else if (!seleccionId || !lista.find((e) => e.id === seleccionId)) {
+            if (enc) seleccionId = enc.id;
+        }
+        if (!seleccionId || !lista.find((e) => e.id === seleccionId)) {
             seleccionId = lista[0] ? lista[0].id : null;
         }
 
         if (lista.length === 0) {
-            return `<div class="doc-container" id="doc-container">${estadoVacio()}</div>`;
+            return `<div class="dx" id="dx-root">${estadoVacio()}<div class="dx-toast" id="dx-toast" hidden></div></div>`;
         }
 
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        docActual = exp.documento ? clon(exp.documento) : construirDoc(exp);
-        undoStack = []; redoStack = []; snapshotPendiente = null;
-        modo = "edicion"; panel = null;
-
         return `
-            <div class="doc-container" id="doc-container">
-                ${pintarTop(exp, lista)}
-                <div class="doc-body">
-                    <aside class="doc-sidebar zv-no-scrollbar" id="doc-sidebar">${pintarSidebar(lista)}</aside>
-                    <section class="doc-main" id="doc-main">${pintarMain(exp)}</section>
+            <div class="dx" id="dx-root">
+                <div class="dx-head">
+                    <div class="dx-head-info">
+                        <h3 class="dx-head-title">Expedientes activos</h3>
+                        <p class="dx-head-sub">Administra los documentos en curso. Al enviarlos a Logística se archivan automáticamente.</p>
+                    </div>
+                    <div class="dx-head-search">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+                        <input type="search" id="dx-search" placeholder="Buscar por obra, requerimiento o expediente…">
+                    </div>
                 </div>
-                <div class="doc-toast" id="doc-toast" hidden></div>
+                <div class="dx-body">
+                    <aside class="dx-list zv-no-scrollbar" id="dx-list">${pintarLista(lista)}</aside>
+                    <section class="dx-detail zv-no-scrollbar" id="dx-detail">${pintarDetalle()}</section>
+                </div>
+                <div class="dx-toast" id="dx-toast" hidden></div>
             </div>`;
     }
 
     function estadoVacio() {
         return `
-            <div class="doc-empty">
-                <div class="doc-empty-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M9.5 13h6M9.5 16.5h6"/></svg>
+            <div class="dx-empty">
+                <div class="dx-empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/><path d="M9.5 13h6M9.5 16.5h6"/></svg>
                 </div>
-                <h3 class="doc-empty-title">Aún no hay Expedientes Digitales</h3>
-                <p class="doc-empty-text">
+                <h3 class="dx-empty-title">No hay expedientes activos</h3>
+                <p class="dx-empty-text">
                     Genera un Expediente Digital desde <strong>Nuevo Requerimiento</strong> y aparecerá aquí
-                    para editarlo profesionalmente. También puedes cargar ejemplos para explorar el editor.
+                    como documento activo, listo para editar y enviar a Logística.
                 </p>
-                <div class="doc-empty-actions">
+                <div class="dx-empty-actions">
                     <button class="nr-btn nr-btn-primary" type="button" data-accion="quick" data-destino="nuevo-requerimiento">Crear requerimiento</button>
-                    <button class="nr-btn nr-btn-soft" type="button" data-doc-tool="sembrar">Cargar ejemplos</button>
+                    <button class="nr-btn nr-btn-soft" type="button" data-dx-act="sembrar">Cargar ejemplos</button>
                 </div>
             </div>`;
     }
 
-    /* ---------- Panel superior: meta + filtros ---------- */
-
-    function pintarTop(exp, lista) {
-        const est = ESTADOS[estadoDoc(exp)];
-        const cfg = ConfiguracionGeneral.obtener();
-
-        const obras = [...new Set(lista.map((e) => e.obra))];
-        const estadosPresentes = [...new Set(lista.map((e) => estadoDoc(e)))];
-
-        return `
-            <div class="doc-header">
-                <div class="doc-meta" id="doc-meta">
-                    <div class="doc-meta-item"><span>N.º Expediente</span><strong>${esc(exp.expCodigo)}</strong></div>
-                    <div class="doc-meta-item"><span>N.º Requerimiento</span><strong>${esc(exp.codigo)}</strong></div>
-                    <div class="doc-meta-item"><span>Obra</span><strong>${esc(exp.obra)}</strong></div>
-                    <div class="doc-meta-item"><span>Estado</span><strong class="doc-status is-${est.clase}">${est.emoji} ${est.label}</strong></div>
-                    <div class="doc-meta-item"><span>Creación</span><strong>${fechaHora(exp.creadoEn)}</strong></div>
-                    <div class="doc-meta-item"><span>Última actualización</span><strong>${fechaHora(exp.actualizadoEn)}</strong></div>
-                </div>
-                <div class="doc-filters">
-                    <input class="nr-input doc-filter" type="search" placeholder="Buscar expediente…" data-doc-filter="texto">
-                    <select class="nr-input doc-filter" data-doc-filter="obra">
-                        <option value="">Todas las obras</option>
-                        ${obras.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}
-                    </select>
-                    <select class="nr-input doc-filter" data-doc-filter="estado">
-                        <option value="">Todos los estados</option>
-                        ${estadosPresentes.map((s) => `<option value="${s}">${ESTADOS[s].emoji} ${ESTADOS[s].label}</option>`).join("")}
-                    </select>
-                </div>
-            </div>`;
+    function valorBusqueda() {
+        const el = document.querySelector("#dx-search");
+        return el ? el.value.trim().toLowerCase() : "";
     }
 
-    /* ---------- Panel izquierdo: agrupado por obra ---------- */
+    function pintarLista(lista) {
+        const q = valorBusqueda();
+        const filtrada = !q ? lista : lista.filter((e) =>
+            `${e.expCodigo} ${e.codigo} ${e.obra}`.toLowerCase().includes(q));
 
-    function filtros() {
-        const r = root();
-        if (!r) return { texto: "", obra: "", estado: "" };
-        const v = (sel) => { const el = r.querySelector(`[data-doc-filter="${sel}"]`); return el ? el.value.trim() : ""; };
-        return { texto: v("texto").toLowerCase(), obra: v("obra"), estado: v("estado") };
-    }
-
-    function pintarSidebar(lista) {
-        const f = filtros();
-
-        const filtrada = lista.filter((e) => {
-            if (f.obra && e.obra !== f.obra) return false;
-            if (f.estado && estadoDoc(e) !== f.estado) return false;
-            if (f.texto) {
-                const blob = `${e.expCodigo} ${e.codigo} ${e.obra}`.toLowerCase();
-                if (!blob.includes(f.texto)) return false;
-            }
-            return true;
-        });
-
-        if (filtrada.length === 0) {
-            return `<p class="doc-side-empty">Sin expedientes que coincidan.</p>`;
+        if (!filtrada.length) {
+            return `<p class="dx-list-empty">Sin expedientes que coincidan con la búsqueda.</p>`;
         }
 
-        // Agrupar por obra (nunca mezclar obras distintas).
+        // Agrupado por obra: cada expediente pertenece a una sola obra.
         const grupos = {};
         filtrada.forEach((e) => { (grupos[e.obra] = grupos[e.obra] || []).push(e); });
 
         return Object.keys(grupos).map((obra) => `
-            <div class="doc-group">
-                <div class="doc-group-head">
-                    <span class="doc-group-name">${esc(obra)}</span>
-                    <span class="doc-group-code">${esc(ConfiguracionGeneral.codigoObra(obra))}</span>
+            <div class="dx-group">
+                <div class="dx-group-head">
+                    <span class="dx-group-name">${esc(obra)}</span>
+                    <span class="dx-group-meta">${esc(ConfiguracionGeneral.codigoObra(obra))} · ${grupos[obra].length}</span>
                 </div>
                 ${grupos[obra].map((e) => {
-                    const est = ESTADOS[estadoDoc(e)];
+                    const est = ESTADOS[estadoDoc(e)] || ESTADOS["listo"];
                     return `
-                        <button type="button" class="doc-side-item ${e.id === seleccionId ? "is-active" : ""}" data-doc-sel="${e.id}">
-                            <span class="doc-side-dot is-${est.clase}" title="${est.label}"></span>
-                            <span class="doc-side-info">
-                                <span class="doc-side-exp">${esc(e.expCodigo)}</span>
-                                <span class="doc-side-req">${esc(e.codigo)}</span>
+                        <button type="button" class="dx-item ${e.id === seleccionId ? "is-active" : ""}" data-dx-sel="${e.id}">
+                            <span class="dx-item-dot is-${est.clase}" title="${est.label}"></span>
+                            <span class="dx-item-info">
+                                <span class="dx-item-exp">${esc(e.expCodigo)}</span>
+                                <span class="dx-item-req">${esc(e.codigo)}</span>
                             </span>
+                            <span class="dx-item-state is-${est.clase}">${est.label}</span>
                         </button>`;
                 }).join("")}
             </div>`).join("");
     }
 
-    /* ---------- Área principal: toolbar + hoja + paneles ---------- */
-
-    function pintarMain(exp) {
-        const editable = modo === "edicion" && !bloqueado(exp);
+    // Panel de acciones (NO abre el editor): vista previa + acciones.
+    function pintarDetalle() {
+        const exp = seleccionId ? RequerimientosDB.buscarExpediente(seleccionId) : null;
+        if (!exp) {
+            return `<div class="dx-detail-empty">Selecciona un expediente para ver sus acciones.</div>`;
+        }
+        const est = ESTADOS[estadoDoc(exp)] || ESTADOS["listo"];
+        const doc = obtenerDoc(exp);
 
         return `
-            ${pintarToolbar(exp)}
-            ${editable ? pintarFormatoBar(docActual) : ""}
-            ${bloqueado(exp) ? bannerBloqueo() : ""}
-            <div class="doc-scroll zv-no-scrollbar" id="doc-scroll">
-                ${pintarHoja(docActual, exp, editable)}
+            <div class="dx-detail-head">
+                <div>
+                    <span class="dx-detail-state is-${est.clase}">${est.label}</span>
+                    <h3 class="dx-detail-title">${esc(exp.expCodigo)}</h3>
+                    <p class="dx-detail-codigo">${esc(exp.codigo)} · ${esc(exp.obra)}</p>
+                </div>
             </div>
-            ${panel === "calidad" ? pintarCalidad(exp) : ""}
-            ${panel === "historial" ? pintarHistorial(exp) : ""}`;
-    }
 
-    function bannerBloqueo() {
-        return `
-            <div class="doc-locked">
-                <span>🔒 Documento bloqueado tras el envío. Solo lectura. Para corregir, crea una nueva versión.</span>
-                <button type="button" class="nr-btn nr-btn-soft" data-doc-tool="nueva-version">Crear nueva versión</button>
+            <div class="dx-detail-meta">
+                <div><span>Partida</span><strong>${esc(exp.partida) || "—"}</strong></div>
+                <div><span>Fecha</span><strong>${esc(exp.fecha) || "—"}</strong></div>
+                <div><span>Ingreso máx. a obra</span><strong>${esc(exp.fechaMaxima) || "—"}</strong></div>
+                <div><span>Materiales</span><strong>${(doc.filas || []).length}</strong></div>
+                <div><span>Creación</span><strong>${fechaHora(exp.creadoEn)}</strong></div>
+                <div><span>Última edición</span><strong>${fechaHora(exp.actualizadoEn)}</strong></div>
+            </div>
+
+            <div class="dx-preview-wrap">
+                <span class="dx-preview-label">Vista previa</span>
+                <div class="dx-preview-frame">
+                    <div class="dx-preview-scale">${pintarHoja(doc, exp, false)}</div>
+                </div>
+            </div>
+
+            <div class="dx-actions">
+                <button type="button" class="dx-act-btn" data-dx-act="preview">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <span>Vista previa</span>
+                </button>
+                <button type="button" class="dx-act-btn is-primary" data-dx-act="editar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                    <span>Editar documento</span>
+                </button>
+                <div class="dx-menu-wrap">
+                    <button type="button" class="dx-act-btn" data-dx-act="descargar-menu">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10M8 11l4 4 4-4M5 20h14"/></svg>
+                        <span>Descargar</span>
+                    </button>
+                    <div class="dx-menu ${menuDescargaDet ? "is-open" : ""}" id="dx-menu-det">
+                        <button type="button" data-dx-dl="pdf">PDF (.pdf)</button>
+                        <button type="button" data-dx-dl="word">Word (.doc)</button>
+                        <button type="button" data-dx-dl="excel">Excel (.xls)</button>
+                    </div>
+                </div>
+                <button type="button" class="dx-act-btn" data-dx-act="imprimir">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v6H7z"/></svg>
+                    <span>Imprimir</span>
+                </button>
+                <button type="button" class="dx-act-btn is-send" data-dx-act="enviar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 20 4l-6 16-3-7-7-1z"/></svg>
+                    <span>Enviar a Logística</span>
+                </button>
             </div>`;
     }
 
-    /* ---------- Barra de herramientas ---------- */
-
-    const ICONOS = {
-        undo: "M9 7 4 12l5 5M4 12h11a5 5 0 0 1 0 10h-1",
-        redo: "m15 7 5 5-5 5M20 12H9a5 5 0 0 0 0 10h1",
-        guardar: "M5 4h11l3 3v13H5zM8 4v5h7M8 14h8v6H8z",
-        regenerar: "M4 12a8 8 0 0 1 14-5l2 2M20 12a8 8 0 0 1-14 5l-2-2M18 4v5h-5M6 20v-5h5",
-        preview: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
-        calidad: "M9 12l2 2 4-5M12 3l7 3v6c0 5-3.5 7.5-7 9-3.5-1.5-7-4-7-9V6z",
-        descargar: "M12 4v10M8 11l4 4 4-4M5 20h14",
-        imprimir: "M7 8V3h10v5M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v6H7z",
-        enviar: "M4 12 20 4l-6 16-3-7-7-1z",
-        historial: "M3 12a9 9 0 1 0 9-9 9 9 0 0 0-7 3.5M3 4v4h4M12 8v4l3 2"
-    };
-
-    function btn(tool, etiqueta, { primario = false, peligro = false, disabled = false } = {}) {
-        const clase = primario ? "doc-tool is-primary" : (peligro ? "doc-tool is-danger" : "doc-tool");
-        return `
-            <button type="button" class="${clase}" data-doc-tool="${tool}" ${disabled ? "disabled" : ""} title="${etiqueta}">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONOS[tool]}"/></svg>
-                <span class="doc-tool-label">${etiqueta}</span>
-            </button>`;
+    function repintarLista() {
+        const cont = document.querySelector("#dx-list");
+        if (cont) cont.innerHTML = pintarLista(listarActivos());
     }
 
-    function pintarToolbar(exp) {
-        const lock = bloqueado(exp);
+    function repintarDetalle() {
+        const cont = document.querySelector("#dx-detail");
+        if (cont) cont.innerHTML = pintarDetalle();
+    }
+
+    function seleccionarAdmin(id) {
+        seleccionId = id;
+        menuDescargaDet = false;
+        repintarLista();
+        repintarDetalle();
+    }
+
+    /* ============================================================
+       LA HOJA (documento corporativo construido automáticamente)
+       ------------------------------------------------------------
+       Misma función para editor (editable), vista previa, panel de
+       acciones e impresión. Campos enriquecidos = HTML; tabla con
+       columnas dinámicas; la fecha máxima vive en Datos Generales.
+       ============================================================ */
+
+    function dgItem(label, key, doc, ce, wide) {
         return `
-            <div class="doc-toolbar">
-                <div class="doc-tool-group">
-                    ${btn("undo", "Deshacer", { disabled: lock })}
-                    ${btn("redo", "Rehacer", { disabled: lock })}
-                </div>
-                <div class="doc-tool-group">
-                    ${btn("guardar", "Guardar cambios", { disabled: lock })}
-                    ${btn("regenerar", "Regenerar", { disabled: lock })}
-                </div>
-                <div class="doc-tool-group">
-                    ${btn("preview", modo === "preview" ? "Salir de vista previa" : "Vista previa")}
-                    ${btn("calidad", "Panel de Calidad")}
-                    ${btn("historial", "Historial")}
-                </div>
-                <div class="doc-tool-group doc-tool-right">
-                    <div class="doc-menu-wrap">
-                        ${btn("descargar", "Descargar")}
-                        <div class="doc-menu ${menuDescargaAbierto ? "is-open" : ""}" id="doc-menu-descarga">
-                            <button type="button" data-doc-download="pdf">PDF (.pdf)</button>
-                            <button type="button" data-doc-download="word">Word (.doc)</button>
-                            <button type="button" data-doc-download="excel">Excel (.xls)</button>
-                        </div>
-                    </div>
-                    ${btn("imprimir", "Imprimir")}
-                    ${btn("enviar", "Enviar a Logística", { primario: true, disabled: lock })}
-                </div>
+            <div class="dx-dg-item ${wide ? "dx-dg-wide" : ""}">
+                <span>${esc(label)}</span>
+                <strong ${ce} data-dg="${key}">${doc.dg[key] || ""}</strong>
             </div>`;
     }
 
-    /* ---------- Barra de formato (personalización total) ---------- */
+    function pintarTabla(doc, editable) {
+        const ce = editable ? 'contenteditable="true"' : "";
+        const cols = doc.columnas;
 
-    function pintarFormatoBar(doc) {
-        const fuentes = ["Arial", "Georgia", "Times New Roman", "Calibri", "Verdana", "Tahoma"];
-        const op = (v, sel) => `<option value="${v}" ${v === sel ? "selected" : ""}>${v}</option>`;
+        const colItem = `<col style="width:48px">`;
+        const colData = cols.map((c) => `<col style="${c.ancho ? `width:${c.ancho}px` : ""}">`).join("");
+        const colAcc  = editable ? `<col style="width:40px">` : "";
+
+        const thCols = cols.map((c, ci) => `
+            <th class="dx-th" style="text-align:${c.align}">
+                <span class="dx-th-label" ${ce} data-coltitle="${ci}">${esc(c.titulo)}</span>
+                ${editable ? `
+                    <span class="dx-col-tools">
+                        <button type="button" class="dx-col-btn" data-col-move="${ci}" data-dir="-1" title="Mover a la izquierda">‹</button>
+                        <button type="button" class="dx-col-btn" data-col-move="${ci}" data-dir="1" title="Mover a la derecha">›</button>
+                        <button type="button" class="dx-col-btn is-del" data-col-del="${ci}" title="Eliminar columna">✕</button>
+                    </span>
+                    <span class="dx-col-resize" data-col-resize="${ci}"></span>` : ""}
+            </th>`).join("");
+
+        const filaCols = (f, ri) => cols.map((c) =>
+            `<td class="dx-td" style="text-align:${c.align}" ${ce} data-cell data-row="${ri}" data-col="${c.id}">${f[c.id] || ""}</td>`
+        ).join("");
+
+        const cuerpo = doc.filas.length
+            ? doc.filas.map((f, ri) => `
+                <tr>
+                    <td class="dx-td dx-td-item">${ri + 1}</td>
+                    ${filaCols(f, ri)}
+                    ${editable ? `<td class="dx-td dx-td-acc"><button type="button" class="dx-row-del" data-row-del="${ri}" title="Eliminar fila">✕</button></td>` : ""}
+                </tr>`).join("")
+            : `<tr><td class="dx-td dx-td-item">—</td>${cols.map(() => '<td class="dx-td"></td>').join("")}${editable ? '<td class="dx-td-acc"></td>' : ""}</tr>`;
 
         return `
-            <div class="doc-format-bar zv-no-scrollbar">
-                <label class="doc-fmt"><span>Color</span>
-                    <input type="color" data-doc-fmt="colorPrimario" value="${doc.colorPrimario}"></label>
-                <label class="doc-fmt"><span>Texto</span>
-                    <input type="color" data-doc-fmt="colorTexto" value="${doc.colorTexto}"></label>
-                <label class="doc-fmt"><span>Tipografía</span>
-                    <select data-doc-fmt="fuente">${fuentes.map((f) => op(f, doc.fuente)).join("")}</select></label>
-                <div class="doc-fmt"><span>Alineación</span>
-                    <div class="doc-seg">
-                        <button type="button" data-doc-fmt="alinear" data-val="left" class="${doc.alinear === "left" ? "is-on" : ""}">⬅</button>
-                        <button type="button" data-doc-fmt="alinear" data-val="center" class="${doc.alinear === "center" ? "is-on" : ""}">⬌</button>
-                        <button type="button" data-doc-fmt="alinear" data-val="right" class="${doc.alinear === "right" ? "is-on" : ""}">➡</button>
-                    </div>
-                </div>
-                <label class="doc-fmt"><span>Márgenes</span>
-                    <input type="range" min="12" max="64" step="4" data-doc-fmt="margen" value="${doc.margen}"></label>
-                <div class="doc-fmt"><span>Logo</span>
-                    <div class="doc-seg">
-                        <button type="button" data-doc-fmt="logoPos" data-val="left" class="${doc.logoPos === "left" ? "is-on" : ""}">⬅</button>
-                        <button type="button" data-doc-fmt="logoPos" data-val="center" class="${doc.logoPos === "center" ? "is-on" : ""}">⬌</button>
-                        <button type="button" data-doc-fmt="logoPos" data-val="right" class="${doc.logoPos === "right" ? "is-on" : ""}">➡</button>
-                    </div>
-                </div>
-                <label class="doc-fmt"><span>Tamaño logo</span>
-                    <input type="range" min="40" max="120" step="4" data-doc-fmt="logoSize" value="${doc.logoSize}"></label>
-                <label class="doc-fmt doc-fmt-file"><span>Cambiar logo</span>
-                    <input type="file" accept="image/*" data-doc-fmt="logoUpload"></label>
-            </div>`;
+            <div class="dx-table-wrap zv-no-scrollbar">
+                <table class="dx-table">
+                    <colgroup>${colItem}${colData}${colAcc}</colgroup>
+                    <thead>
+                        <tr>
+                            <th class="dx-th dx-th-item">Ítem</th>
+                            ${thCols}
+                            ${editable ? '<th class="dx-th dx-th-acc"><button type="button" class="dx-col-add" data-col-add title="Agregar columna">+</button></th>' : ""}
+                        </tr>
+                    </thead>
+                    <tbody>${cuerpo}</tbody>
+                </table>
+            </div>
+            ${editable ? '<button type="button" class="dx-add-row" data-row-add>+ Agregar fila</button>' : ""}`;
     }
-
-    /* ---------- La HOJA (documento institucional, tipo Excel) ---------- */
 
     function pintarHoja(doc, exp, editable) {
-        const cfg = ConfiguracionGeneral.obtener();
         const ce = editable ? 'contenteditable="true"' : "";
         const estilo = [
-            `--doc-primary:${doc.colorPrimario}`,
-            `--doc-text:${doc.colorTexto}`,
+            `--dx-primary:${doc.colorPrimario}`,
+            `--dx-text:${doc.colorTexto}`,
+            `--dx-border:${doc.colorBorde}`,
+            `--dx-bw:${doc.bordeAncho}px`,
             `font-family:'${doc.fuente}',Arial,sans-serif`,
+            `font-size:${doc.fontSize}px`,
+            `line-height:${doc.interlineado}`,
             `padding:${doc.margen}px`
         ].join(";");
 
         const logo = doc.logoUrl
-            ? `<img src="${esc(doc.logoUrl)}" alt="Logo" class="doc-logo-img" style="height:${doc.logoSize}px">`
-            : `<span class="doc-logo-mono" style="width:${doc.logoSize}px;height:${doc.logoSize}px">Z</span>`;
+            ? `<img src="${esc(doc.logoUrl)}" alt="Logo" class="dx-sheet-logo-img" style="height:${doc.logoSize}px">`
+            : `<span class="dx-sheet-logo-mono" style="width:${doc.logoSize}px;height:${doc.logoSize}px">Z</span>`;
 
         return `
-            <div class="doc-sheet ${editable ? "" : "is-readonly"}" id="doc-sheet" style="${estilo}">
-                <div class="doc-paper">
+            <div class="dx-sheet ${editable ? "is-editable" : "is-readonly"}" ${editable ? 'id="dx-sheet"' : ""} style="${estilo}">
 
-                    <header class="doc-paper-head doc-logo-${doc.logoPos}">
-                        <div class="doc-logo">${logo}</div>
-                        <div class="doc-empresa">
-                            <strong>${esc(cfg.empresa)}</strong>
-                            <span>RUC: ${esc(cfg.ruc)}</span>
-                            <span>${esc(cfg.direccion)}</span>
-                        </div>
-                    </header>
-
-                    <div class="doc-title-block" style="text-align:${doc.alinear}">
-                        <h1 class="doc-doc-title" ${ce} data-doc="titulo">${esc(doc.titulo)}</h1>
-                        <p class="doc-doc-subtitle" ${ce} data-doc="subtitulo">${esc(doc.subtitulo)}</p>
-                        <p class="doc-doc-encabezado" ${ce} data-doc="encabezado">${esc(doc.encabezado)}</p>
+                <header class="dx-sheet-head dx-logo-${doc.logoPos}">
+                    <div class="dx-sheet-logo">${logo}</div>
+                    <div class="dx-sheet-empresa">
+                        <strong ${ce} data-edit="empresa">${doc.empresa}</strong>
+                        <span>RUC: <span ${ce} data-edit="ruc">${doc.ruc}</span></span>
+                        <span ${ce} data-edit="direccion">${doc.direccion}</span>
                     </div>
-
-                    <div class="doc-info">
-                        <div><span>N.º Expediente</span><strong>${esc(exp.expCodigo)}</strong></div>
-                        <div><span>N.º Requerimiento</span><strong>${esc(exp.codigo)}</strong></div>
-                        <div><span>Código de Obra</span><strong>${esc(ConfiguracionGeneral.codigoObra(exp.obra))}</strong></div>
-                        <div><span>Obra</span><strong>${esc(exp.obra)}</strong></div>
-                        <div><span>Fecha</span><strong>${esc(exp.fecha)}</strong></div>
-                        <div><span>Fecha máxima de ingreso</span><strong>${esc(exp.fechaMaxima)}</strong></div>
-                        <div class="doc-info-wide"><span>Lugar de entrega</span><strong ${ce} data-doc="lugarEntrega">${esc(doc.lugarEntrega)}</strong></div>
+                    <div class="dx-sheet-codes">
+                        <span>N.º Requerimiento</span><strong>${esc(exp.codigo)}</strong>
+                        <span>Código / Expediente</span><strong>${esc(exp.expCodigo)}</strong>
                     </div>
+                </header>
 
-                    <table class="doc-table">
-                        <thead>
-                            <tr>
-                                <th class="doc-c-item">Ítem</th>
-                                <th class="doc-c-um">U.M.</th>
-                                <th class="doc-c-cant">Cantidad</th>
-                                <th>Descripción del Material</th>
-                                <th class="doc-c-fecha">Fecha Máxima de Ingreso</th>
-                                <th>Observaciones</th>
-                                ${editable ? '<th class="doc-c-acc"></th>' : ""}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${doc.filas.map((f, i) => `
-                                <tr>
-                                    <td class="doc-c-item">${i + 1}</td>
-                                    <td class="doc-c-um" ${ce} data-cell data-row="${i}" data-col="um">${esc(f.um)}</td>
-                                    <td class="doc-c-cant" ${ce} data-cell data-row="${i}" data-col="cantidad">${esc(f.cantidad)}</td>
-                                    <td ${ce} data-cell data-row="${i}" data-col="descripcion">${esc(f.descripcion)}</td>
-                                    <td class="doc-c-fecha" ${ce} data-cell data-row="${i}" data-col="fechaMax">${esc(f.fechaMax)}</td>
-                                    <td ${ce} data-cell data-row="${i}" data-col="observaciones">${esc(f.observaciones)}</td>
-                                    ${editable ? `<td class="doc-c-acc"><button type="button" class="doc-row-del" data-doc-row="del" data-row="${i}" title="Eliminar fila">✕</button></td>` : ""}
-                                </tr>`).join("")}
-                        </tbody>
-                    </table>
-                    ${editable ? '<button type="button" class="doc-add-row" data-doc-row="add">+ Agregar fila</button>' : ""}
+                <div class="dx-sheet-title" style="text-align:${doc.alinearTitulo}">
+                    <h1 ${ce} data-edit="nombreDoc">${doc.nombreDoc}</h1>
+                    <p ${ce} data-edit="subtitulo">${doc.subtitulo}</p>
+                </div>
 
-                    <div class="doc-obs">
-                        <span class="doc-obs-label">Observaciones generales</span>
-                        <div class="doc-obs-text" ${ce} data-doc="observaciones">${esc(doc.observaciones)}</div>
+                <div class="dx-sheet-dg">
+                    ${dgItem("Obra", "obra", doc, ce, true)}
+                    ${dgItem("Partida", "partida", doc, ce)}
+                    ${dgItem("Requerido por", "requeridoPor", doc, ce)}
+                    ${dgItem("Cargo", "cargoRequerido", doc, ce)}
+                    ${dgItem("Recibido por", "recibidoPor", doc, ce)}
+                    ${dgItem("Cargo", "cargoRecibido", doc, ce)}
+                    ${dgItem("Fecha", "fecha", doc, ce)}
+                    ${dgItem("Fecha máxima de ingreso a obra", "fechaMaxima", doc, ce, true)}
+                </div>
+
+                ${pintarTabla(doc, editable)}
+
+                <div class="dx-sheet-obs">
+                    <span class="dx-sheet-obs-label">Observaciones</span>
+                    <div class="dx-sheet-obs-text" ${ce} data-edit="observaciones">${doc.observaciones}</div>
+                </div>
+
+                <div class="dx-sheet-foot">
+                    <div class="dx-sheet-lugar">
+                        <span>Lugar de entrega</span>
+                        <strong ${ce} data-edit="lugarEntrega">${doc.lugarEntrega}</strong>
                     </div>
-
-                    <div class="doc-firmas">
-                        ${doc.firmas.map((s) => `
-                            <div class="doc-firma">
-                                <div class="doc-firma-line"></div>
-                                <strong>${esc(s.nombre)}</strong>
-                                <span>${esc(s.rol)}${s.cargo ? " · " + esc(s.cargo) : ""}</span>
+                    <div class="dx-sheet-firmas">
+                        ${doc.firmas.map((s, i) => `
+                            <div class="dx-firma">
+                                <div class="dx-firma-line"></div>
+                                <strong ${ce} data-firma="${i}">${s.nombre}</strong>
+                                <span ${ce} data-firma-rol="${i}">${s.rol}</span>
                             </div>`).join("")}
                     </div>
-
-                    <footer class="doc-paper-foot" ${ce} data-doc="pie">${esc(doc.pie)}</footer>
-
                 </div>
             </div>`;
     }
 
-    /* ---------- Panel de Calidad (validación) ---------- */
+    /* ============================================================
+       EDITOR PROFESIONAL (overlay a pantalla completa)
+       ============================================================ */
 
-    function validar(doc, exp) {
+    const REC_KEY = "zovrake_dx_rec_";
+    const MSG_KEY = "zovrake_dx_envio_msg_";
+    let beforeUnloadAttached = false;
+    let toastTimer = null;
+
+    const ICN = {
+        volver:    '<path d="M15 6l-6 6 6 6"/>',
+        undo:      '<path d="M9 7 4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-1"/>',
+        redo:      '<path d="m15 7 5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h1"/>',
+        guardar:   '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7"/><path d="M8 14h8v6H8z"/>',
+        descargar: '<path d="M12 4v10M8 11l4 4 4-4M5 20h14"/>',
+        imprimir:  '<path d="M7 8V3h10v5"/><path d="M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v6H7z"/>',
+        enviar:    '<path d="M4 12 20 4l-6 16-3-7-7-1z"/>'
+    };
+
+    function edBtn(act, label, icon, opts) {
+        opts = opts || {};
+        const cls = ["dx-tb-btn"];
+        if (opts.primary) cls.push("is-primary");
+        if (opts.send) cls.push("is-send");
+        if (opts.ghost) cls.push("is-ghost");
+        return `
+            <button type="button" class="${cls.join(" ")}" data-ed="${act}" title="${esc(label)}" ${opts.disabled ? "disabled" : ""}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>
+                <span class="dx-tb-label">${esc(label)}</span>
+            </button>`;
+    }
+
+    function pintarTopBar(exp, est) {
+        return `
+            <header class="dx-editor-top">
+                <div class="dx-tb-group">
+                    ${edBtn("volver", "Volver", ICN.volver, { ghost: true })}
+                </div>
+                <div class="dx-tb-group">
+                    ${edBtn("undo", "Deshacer", ICN.undo)}
+                    ${edBtn("redo", "Rehacer", ICN.redo)}
+                </div>
+                <div class="dx-tb-group">
+                    ${edBtn("guardar", "Guardar", ICN.guardar)}
+                </div>
+                <div class="dx-tb-status">
+                    <span class="dx-tb-state is-${est.clase}">${est.label}</span>
+                    <span class="dx-tb-autosave is-saved" id="dx-autosave">Guardado</span>
+                </div>
+                <div class="dx-tb-group dx-tb-right">
+                    <div class="dx-menu-wrap">
+                        ${edBtn("descargar", "Descargar", ICN.descargar)}
+                        <div class="dx-menu ${menuDescarga ? "is-open" : ""}" id="dx-menu-ed">
+                            <button type="button" data-ed-dl="pdf">PDF (.pdf)</button>
+                            <button type="button" data-ed-dl="word">Word (.doc)</button>
+                            <button type="button" data-ed-dl="excel">Excel (.xls)</button>
+                        </div>
+                    </div>
+                    ${edBtn("imprimir", "Imprimir", ICN.imprimir)}
+                    ${edBtn("enviar", "Enviar a Logística", ICN.enviar, { send: true })}
+                </div>
+            </header>`;
+    }
+
+    function pintarFormatBar(doc) {
+        const fuentes = ["Arial", "Georgia", "Times New Roman", "Calibri", "Verdana", "Tahoma", "Trebuchet MS"];
+        const tamanos = [10, 11, 12, 13, 14, 16, 18, 20, 24];
+        const opF = (v) => `<option value="${v}" ${v === doc.fuente ? "selected" : ""}>${v}</option>`;
+        const opS = (v) => `<option value="${v}" ${v === doc.fontSize ? "selected" : ""}>${v}px</option>`;
+        const seg = (key, val, glyph, title) =>
+            `<button type="button" class="dx-fmt-seg-btn ${doc[key] === val ? "is-on" : ""}" data-fmt-seg="${key}" data-val="${val}" title="${title}">${glyph}</button>`;
+
+        return `
+            <div class="dx-format zv-no-scrollbar" id="dx-format">
+                <div class="dx-fmt-group">
+                    <select class="dx-fmt-input" data-fmt-sel="fuente" title="Tipografía">${fuentes.map(opF).join("")}</select>
+                    <select class="dx-fmt-input dx-fmt-size" data-fmt-sel="fontSize" title="Tamaño de texto">${tamanos.map(opS).join("")}</select>
+                </div>
+                <div class="dx-fmt-group">
+                    <button type="button" class="dx-fmt-btn" data-cmd="bold" title="Negrita"><b>B</b></button>
+                    <button type="button" class="dx-fmt-btn" data-cmd="italic" title="Cursiva"><i>I</i></button>
+                    <button type="button" class="dx-fmt-btn" data-cmd="underline" title="Subrayado"><u>U</u></button>
+                </div>
+                <div class="dx-fmt-group">
+                    <label class="dx-fmt-color" title="Color principal"><span>Color</span><input type="color" data-fmt-live="colorPrimario" value="${doc.colorPrimario}"></label>
+                    <label class="dx-fmt-color" title="Color de texto"><span>Texto</span><input type="color" data-fmt-live="colorTexto" value="${doc.colorTexto}"></label>
+                </div>
+                <div class="dx-fmt-group">
+                    ${seg("alinearTitulo", "left", "⯇", "Alinear izquierda")}
+                    ${seg("alinearTitulo", "center", "≡", "Centrar")}
+                    ${seg("alinearTitulo", "right", "⯈", "Alinear derecha")}
+                </div>
+                <div class="dx-fmt-group">
+                    <label class="dx-fmt-range" title="Espaciado"><span>Espaciado</span><input type="range" min="1" max="2.4" step="0.1" data-fmt-live="interlineado" value="${doc.interlineado}"></label>
+                    <label class="dx-fmt-range" title="Márgenes"><span>Márgenes</span><input type="range" min="16" max="64" step="2" data-fmt-live="margen" value="${doc.margen}"></label>
+                </div>
+                <div class="dx-fmt-group">
+                    <label class="dx-fmt-range" title="Grosor de borde"><span>Borde</span><input type="range" min="0" max="3" step="0.5" data-fmt-live="bordeAncho" value="${doc.bordeAncho}"></label>
+                    <label class="dx-fmt-color" title="Color de borde"><span>Borde</span><input type="color" data-fmt-live="colorBorde" value="${doc.colorBorde}"></label>
+                </div>
+                <div class="dx-fmt-group">
+                    ${seg("logoPos", "left", "⯇", "Logo a la izquierda")}
+                    ${seg("logoPos", "center", "≡", "Logo centrado")}
+                    ${seg("logoPos", "right", "⯈", "Logo a la derecha")}
+                    <label class="dx-fmt-range" title="Tamaño del logo"><span>Logo</span><input type="range" min="40" max="120" step="4" data-fmt-live="logoSize" value="${doc.logoSize}"></label>
+                    <button type="button" class="dx-fmt-btn" data-ed="logo" title="Cambiar logo">⮉</button>
+                </div>
+                <div class="dx-fmt-group">
+                    <button type="button" class="dx-fmt-btn dx-fmt-wide" data-row-add title="Agregar fila">+ Fila</button>
+                    <button type="button" class="dx-fmt-btn dx-fmt-wide" data-col-add title="Agregar columna">+ Columna</button>
+                </div>
+            </div>`;
+    }
+
+    function pintarFormatBarRefresh() {
+        const fb = document.getElementById("dx-format");
+        if (fb) fb.outerHTML = pintarFormatBar(docActual);
+    }
+
+    /* ---------- Validación + Panel de Calidad (automático) ---------- */
+
+    function validarDoc(doc, exp) {
         const errores = [];
-        const advertencias = [];
+        const pendientes = [];
+        const orto = [];
 
-        if (!doc.titulo.trim()) errores.push("El título del documento es obligatorio.");
-        if (!exp.obra) errores.push("El expediente no tiene obra asignada.");
-        if (!doc.lugarEntrega.trim()) errores.push("Indica el lugar de entrega.");
+        if (!txt(doc.nombreDoc)) errores.push({ m: "Falta el nombre del documento.", t: '[data-edit="nombreDoc"]' });
+        if (!txt(doc.dg.obra)) errores.push({ m: "Falta la obra en los datos generales.", t: '[data-dg="obra"]' });
+        if (!txt(doc.lugarEntrega)) pendientes.push({ m: "Indica el lugar de entrega.", t: '[data-edit="lugarEntrega"]' });
+        if (!txt(doc.dg.requeridoPor)) pendientes.push({ m: "Falta «Requerido por».", t: '[data-dg="requeridoPor"]' });
 
-        // Fechas.
-        const fGen = new Date(exp.fecha);
-        const fMax = new Date(exp.fechaMaxima);
-        if (isNaN(fGen.getTime())) errores.push("La fecha del documento no es válida.");
-        if (isNaN(fMax.getTime())) errores.push("La fecha máxima de ingreso no es válida.");
-        if (!isNaN(fGen.getTime()) && !isNaN(fMax.getTime()) && fMax < fGen) {
-            errores.push("La fecha máxima no puede ser anterior a la fecha del documento.");
+        const f1 = new Date(txt(doc.dg.fecha));
+        const f2 = new Date(txt(doc.dg.fechaMaxima));
+        if (!txt(doc.dg.fecha) || isNaN(f1.getTime())) errores.push({ m: "La fecha del documento no es válida.", t: '[data-dg="fecha"]' });
+        if (!txt(doc.dg.fechaMaxima) || isNaN(f2.getTime())) errores.push({ m: "La fecha máxima de ingreso no es válida.", t: '[data-dg="fechaMaxima"]' });
+        if (!isNaN(f1.getTime()) && !isNaN(f2.getTime()) && f2 < f1) {
+            errores.push({ m: "La fecha máxima no puede ser anterior a la fecha del documento.", t: '[data-dg="fechaMaxima"]' });
         }
 
-        // Tabla / cantidades / formato.
-        if (doc.filas.length === 0) {
-            errores.push("El documento debe tener al menos un material.");
+        if (!doc.filas.length) {
+            errores.push({ m: "La tabla no tiene materiales.", t: ".dx-table" });
         } else {
             doc.filas.forEach((f, i) => {
-                if (!f.descripcion.trim()) errores.push(`Ítem ${i + 1}: falta la descripción del material.`);
-                if (!(parseFloat(f.cantidad) > 0)) errores.push(`Ítem ${i + 1}: la cantidad debe ser mayor a 0.`);
-                if (!f.um.trim()) advertencias.push(`Ítem ${i + 1}: sin unidad de medida (U.M.).`);
+                if (!txt(f.descripcion)) errores.push({ m: `Ítem ${i + 1}: falta la descripción del material.`, t: `[data-cell][data-row="${i}"][data-col="descripcion"]` });
+                const cant = parseFloat(txt(f.cantidad).replace(",", "."));
+                if (!(cant > 0)) errores.push({ m: `Ítem ${i + 1}: la cantidad debe ser mayor a 0.`, t: `[data-cell][data-row="${i}"][data-col="cantidad"]` });
+                if (!txt(f.um)) pendientes.push({ m: `Ítem ${i + 1}: falta la unidad de medida.`, t: `[data-cell][data-row="${i}"][data-col="um"]` });
             });
         }
 
-        // Ortografía (no bloquea: solo sugiere).
-        const textos = [doc.observaciones].concat(doc.filas.map((f) => f.descripcion + " " + f.observaciones));
+        const campos = [{ h: doc.observaciones, t: '[data-edit="observaciones"]', n: "Observaciones" }];
+        doc.filas.forEach((f, i) => {
+            campos.push({ h: f.descripcion, t: `[data-cell][data-row="${i}"][data-col="descripcion"]`, n: `Ítem ${i + 1} · Descripción` });
+            campos.push({ h: f.observaciones, t: `[data-cell][data-row="${i}"][data-col="observaciones"]`, n: `Ítem ${i + 1} · Observaciones` });
+        });
         const vistos = new Set();
-        textos.forEach((t) => {
-            Ortografia.revisar(t).forEach((h) => {
-                if (!vistos.has(h.palabra.toLowerCase())) {
-                    vistos.add(h.palabra.toLowerCase());
-                    advertencias.push(`Ortografía: «${h.palabra}» → sugerencia «${h.sugerencia}».`);
+        campos.forEach((c) => {
+            Ortografia.revisar(txt(c.h)).forEach((h) => {
+                const k = c.t + "|" + h.palabra.toLowerCase();
+                if (!vistos.has(k)) {
+                    vistos.add(k);
+                    orto.push({ m: `${c.n}: «${h.palabra}» → «${h.sugerencia}».`, t: c.t });
                 }
             });
         });
 
-        return { errores, advertencias };
+        const totalChecks = 6 + doc.filas.length * 2;
+        const fallos = errores.length + pendientes.length;
+        let nivel = Math.round(100 - (fallos * 100 / Math.max(totalChecks, 1)) - orto.length * 3);
+        nivel = Math.max(0, Math.min(100, nivel));
+        if (!errores.length && !pendientes.length && !orto.length) nivel = 100;
+
+        return { errores, pendientes, orto, nivel, ok: errores.length === 0 };
     }
 
-    function pintarCalidad(exp) {
-        const { errores, advertencias } = validar(docActual, exp);
-        const ok = errores.length === 0;
+    function contenidoCalidad(r) {
+        const total = r.errores.length + r.pendientes.length + r.orto.length;
+        const estadoTxt = r.errores.length ? "Documento con errores"
+            : (r.pendientes.length ? "Casi listo · revisa pendientes"
+            : (r.orto.length ? "Listo · revisa ortografía" : "Documento listo para enviar"));
+        const estadoCls = r.errores.length ? "is-bad" : (r.pendientes.length || r.orto.length ? "is-warn" : "is-ok");
+
+        const grupo = (titulo, items, cls) => items.length ? `
+            <div class="dx-q-block">
+                <p class="dx-q-block-title ${cls}">${titulo} (${items.length})</p>
+                <ul class="dx-q-list">${items.map((i) =>
+                    `<li class="${cls}"><button type="button" data-goto="${i.t.replace(/"/g, "&quot;")}">${esc(i.m)}</button></li>`).join("")}</ul>
+            </div>` : "";
 
         return `
-            <div class="doc-quality">
-                <div class="doc-quality-head">
-                    <h4>Panel de Calidad ${ok ? '<span class="doc-q-ok">✓ Listo para enviar</span>' : `<span class="doc-q-bad">${errores.length} error(es)</span>`}</h4>
-                    <button type="button" class="doc-q-close" data-doc-tool="calidad">✕</button>
+            <div class="dx-q-head">
+                <div class="dx-q-title-row">
+                    <h4>Panel de Calidad</h4>
+                    <button type="button" class="dx-q-toggle" data-quality-toggle title="Mostrar / ocultar">⌄</button>
                 </div>
-                ${errores.length ? `
-                    <p class="doc-q-title is-error">Errores (deben corregirse antes de enviar)</p>
-                    <ul class="doc-q-list is-error">${errores.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
-                ${advertencias.length ? `
-                    <p class="doc-q-title is-warn">Advertencias (no bloquean el envío)</p>
-                    <ul class="doc-q-list is-warn">${advertencias.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
-                ${ok && !advertencias.length ? `<p class="doc-q-clean">El documento superó todas las validaciones.</p>` : ""}
+                <div class="dx-q-gauge">
+                    <div class="dx-q-ring ${estadoCls}" style="--p:${r.nivel}"><span>${r.nivel}%</span></div>
+                    <div class="dx-q-gauge-info">
+                        <span class="dx-q-state ${estadoCls}">${estadoTxt}</span>
+                        <span class="dx-q-sub">${r.errores.length} errores · ${r.pendientes.length} pendientes · ${r.orto.length} ortografía</span>
+                    </div>
+                </div>
+            </div>
+            <div class="dx-q-body zv-no-scrollbar">
+                ${total === 0 ? `<p class="dx-q-clean">El documento superó todas las validaciones. Listo para enviar a Logística.</p>` : ""}
+                ${grupo("Errores que impiden el envío", r.errores, "is-bad")}
+                ${grupo("Campos pendientes", r.pendientes, "is-warn")}
+                ${grupo("Ortografía sugerida", r.orto, "is-warn")}
             </div>`;
     }
 
-    /* ---------- Historial ---------- */
-
-    function pintarHistorial(exp) {
-        const items = (exp.historial || []);
-        return `
-            <div class="doc-history">
-                <div class="doc-quality-head">
-                    <h4>Historial del expediente</h4>
-                    <button type="button" class="doc-q-close" data-doc-tool="historial">✕</button>
-                </div>
-                ${items.length === 0 ? `<p class="doc-q-clean">Sin movimientos registrados.</p>` : `
-                    <table class="doc-history-table">
-                        <thead><tr><th>Fecha</th><th>Hora</th><th>Usuario</th><th>Versión</th><th>Acción</th></tr></thead>
-                        <tbody>
-                            ${items.map((h) => `
-                                <tr>
-                                    <td>${esc(h.fecha)}</td><td>${esc(h.hora)}</td>
-                                    <td>${esc(h.usuario)}</td><td>v${esc(h.version)}</td>
-                                    <td>${esc(h.accion)}</td>
-                                </tr>`).join("")}
-                        </tbody>
-                    </table>`}
-            </div>`;
+    function pintarCalidad() {
+        return `<aside class="dx-quality ${calidadColapsada ? "is-collapsed" : ""}" id="dx-quality">${contenidoCalidad(validarDoc(docActual, expActual))}</aside>`;
     }
 
-    /* ---------- Repintado parcial (sin perder listeners) ---------- */
-
-    function repintarMain() {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        const main = root().querySelector("#doc-main");
-        if (main && exp) main.innerHTML = pintarMain(exp);
+    function refrescarCalidad() {
+        const q = document.getElementById("dx-quality");
+        if (!q) return;
+        sincronizarModelo();
+        q.innerHTML = contenidoCalidad(validarDoc(docActual, expActual));
     }
 
-    function repintarMeta() {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        const cont = root();
-        if (!cont || !exp) return;
-        const header = cont.querySelector(".doc-header");
-        if (header) {
-            const lista = listarParaDocumentos();
-            const tmp = document.createElement("div");
-            tmp.innerHTML = pintarTop(exp, lista);
-            // Reemplaza solo el bloque meta para no resetear los filtros.
-            const nuevaMeta = tmp.querySelector("#doc-meta");
-            const metaActual = header.querySelector("#doc-meta");
-            if (nuevaMeta && metaActual) metaActual.innerHTML = nuevaMeta.innerHTML;
-        }
+    function programarCalidad() {
+        clearTimeout(calidadTimer);
+        calidadTimer = setTimeout(refrescarCalidad, 500);
     }
 
-    function repintarSidebar() {
-        const lista = listarParaDocumentos();
-        const sb = root().querySelector("#doc-sidebar");
-        if (sb) sb.innerHTML = pintarSidebar(lista);
+    function irAlCampo(sel) {
+        const s = sheetEl();
+        if (!s) return;
+        let el = null;
+        try { el = s.querySelector(sel); } catch (e) { el = null; }
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("dx-highlight");
+        setTimeout(() => el.classList.remove("dx-highlight"), 1600);
+        if (el.isContentEditable) el.focus();
+    }
+
+    function resaltarPrimerError(r) {
+        const q = document.getElementById("dx-quality");
+        if (q) { calidadColapsada = false; q.classList.remove("is-collapsed"); }
+        const first = r.errores[0] || r.pendientes[0];
+        if (first) irAlCampo(first.t);
+    }
+
+    /* ---------- Sincronización modelo <-> hoja ---------- */
+
+    function sincronizarModelo() {
+        const s = sheetEl();
+        if (!s) return;
+        s.querySelectorAll("[data-edit]").forEach((el) => { docActual[el.dataset.edit] = el.innerHTML; });
+        s.querySelectorAll("[data-dg]").forEach((el) => { docActual.dg[el.dataset.dg] = el.innerHTML; });
+        s.querySelectorAll("[data-firma]").forEach((el) => {
+            const i = parseInt(el.dataset.firma, 10);
+            if (docActual.firmas[i]) docActual.firmas[i].nombre = el.innerHTML;
+        });
+        s.querySelectorAll("[data-firma-rol]").forEach((el) => {
+            const i = parseInt(el.dataset.firmaRol, 10);
+            if (docActual.firmas[i]) docActual.firmas[i].rol = el.innerHTML;
+        });
+        s.querySelectorAll("[data-coltitle]").forEach((el) => {
+            const i = parseInt(el.dataset.coltitle, 10);
+            if (docActual.columnas[i]) docActual.columnas[i].titulo = el.innerText;
+        });
+        s.querySelectorAll("[data-cell]").forEach((el) => {
+            const r = parseInt(el.dataset.row, 10);
+            if (docActual.filas[r]) docActual.filas[r][el.dataset.col] = el.innerHTML;
+        });
+    }
+
+    function renderSheet() {
+        sincronizarModelo();
+        const sc = document.getElementById("dx-editor-scroll");
+        if (sc) sc.innerHTML = pintarHoja(docActual, expActual, true);
+    }
+
+    function aplicarEstiloHoja() {
+        const s = sheetEl();
+        if (!s) return;
+        s.style.setProperty("--dx-primary", docActual.colorPrimario);
+        s.style.setProperty("--dx-text", docActual.colorTexto);
+        s.style.setProperty("--dx-border", docActual.colorBorde);
+        s.style.setProperty("--dx-bw", docActual.bordeAncho + "px");
+        s.style.fontFamily = `'${docActual.fuente}',Arial,sans-serif`;
+        s.style.fontSize = docActual.fontSize + "px";
+        s.style.lineHeight = docActual.interlineado;
+        s.style.padding = docActual.margen + "px";
     }
 
     /* ---------- Undo / Redo ---------- */
 
     function actualizarUndoUI() {
-        const cont = root();
-        if (!cont) return;
-        const u = cont.querySelector('[data-doc-tool="undo"]');
-        const r = cont.querySelector('[data-doc-tool="redo"]');
+        const ov = rootEditor();
+        if (!ov) return;
+        const u = ov.querySelector('[data-ed="undo"]');
+        const r = ov.querySelector('[data-ed="redo"]');
         if (u) u.disabled = undoStack.length === 0;
         if (r) r.disabled = redoStack.length === 0;
     }
 
-    // Captura el estado actual antes de un cambio estructural/control.
     function capturar() {
+        sincronizarModelo();
         undoStack.push(clon(docActual));
-        if (undoStack.length > 60) undoStack.shift();
+        if (undoStack.length > 80) undoStack.shift();
         redoStack = [];
         actualizarUndoUI();
     }
 
     function deshacer() {
-        if (undoStack.length === 0) return;
+        if (!undoStack.length) return;
+        sincronizarModelo();
         redoStack.push(clon(docActual));
         docActual = undoStack.pop();
-        repintarMain();
+        renderSheet();
         actualizarUndoUI();
+        refrescarCalidad();
+        programarAutosave();
     }
 
     function rehacer() {
-        if (redoStack.length === 0) return;
+        if (!redoStack.length) return;
+        sincronizarModelo();
         undoStack.push(clon(docActual));
         docActual = redoStack.pop();
-        repintarMain();
+        renderSheet();
         actualizarUndoUI();
+        refrescarCalidad();
+        programarAutosave();
     }
 
-    /* ---------- Toast ---------- */
+    /* ---------- AutoSave + recuperación ---------- */
 
-    let toastTimer = null;
-    function toast(msg, tipo = "ok") {
-        const t = root() && root().querySelector("#doc-toast");
-        if (!t) return;
-        t.className = `doc-toast is-${tipo}`;
-        t.textContent = msg;
-        t.hidden = false;
-        clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+    function setAutosaveUI(texto, cls) {
+        const el = document.getElementById("dx-autosave");
+        if (el) { el.textContent = texto; el.className = "dx-tb-autosave " + (cls || ""); }
     }
 
-    /* ---------- Acciones ---------- */
+    function programarAutosave() {
+        estadoGuardado = "pendiente";
+        setAutosaveUI("Editando…", "is-pending");
+        clearTimeout(autosaveTimer);
+        autosaveTimer = setTimeout(() => autosave(false), 1400);
+    }
 
-    function guardarCambios(silencioso) {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
+    function autosave() {
+        if (!abiertoId) return;
+        sincronizarModelo();
+        const exp = RequerimientosDB.buscarExpediente(abiertoId);
+        if (!exp) return;
         exp.documento = clon(docActual);
-        if (estadoDoc(exp) !== "enviado-logistica" && !bloqueado(exp)) {
-            exp.docEstado = "en-edicion";
-        }
-        RequerimientosDB.registrarHistorial(exp, "Guardó cambios del documento", exp.version || 1);
+        exp.documentoTs = Date.now();
+        if (estadoDoc(exp) !== "enviado-logistica" && !exp.enviadoLogistica) exp.docEstado = "en-edicion";
         RequerimientosDB.actualizarExpediente(exp);
-        repintarMeta();
-        repintarSidebar();
-        if (!silencioso) toast("Cambios guardados.");
+        try { localStorage.setItem(REC_KEY + exp.id, JSON.stringify({ ts: Date.now(), doc: docActual })); } catch (e) { /* almacenamiento lleno */ }
+        estadoGuardado = "guardado";
+        setAutosaveUI("Guardado automático ✓", "is-saved");
     }
 
-    function regenerar() {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        capturar();
-        docActual = construirDoc(exp);
-        repintarMain();
-        toast("Documento regenerado desde el Expediente Digital.");
+    function flushAutosave() {
+        if (!abiertoId) return;
+        if (estadoGuardado !== "guardado") {
+            autosave();
+        } else {
+            try { localStorage.setItem(REC_KEY + abiertoId, JSON.stringify({ ts: Date.now(), doc: docActual })); } catch (e) { /* noop */ }
+        }
     }
 
-    function alternarPreview() {
-        modo = (modo === "preview") ? "edicion" : "preview";
-        repintarMain();
+    function onVisibility() {
+        if (document.hidden) flushAutosave();
     }
 
-    function alternarPanel(cual) {
-        panel = (panel === cual) ? null : cual;
-        repintarMain();
+    // Carga el documento del expediente y, si existe un respaldo de
+    // recuperación más reciente (cierre accidental), lo restaura.
+    function recuperarOCargar(exp) {
+        const base = obtenerDoc(exp);
+        try {
+            const raw = localStorage.getItem(REC_KEY + exp.id);
+            if (raw) {
+                const rec = JSON.parse(raw);
+                if (rec && rec.doc && rec.doc.__v === 2 && rec.ts && rec.ts > (exp.documentoTs || 0)) {
+                    rec.doc.__recuperado = true;
+                    return rec.doc;
+                }
+            }
+        } catch (e) { /* sin respaldo */ }
+        return base;
     }
 
-    // Construye un objeto compatible con DocumentGenerator a partir
-    // del documento editado (reutiliza la exportación existente).
+    /* ---------- Guardar manual (nueva versión) ---------- */
+
+    function guardarManual() {
+        sincronizarModelo();
+        const exp = RequerimientosDB.buscarExpediente(abiertoId);
+        if (!exp) return;
+        exp.documento = clon(docActual);
+        exp.documentoTs = Date.now();
+        if (!Array.isArray(exp.versiones)) exp.versiones = [];
+        exp.versiones.push({ version: exp.versiones.length + 1, doc: clon(docActual), guardadoEn: Date.now() });
+        exp.version = exp.versiones.length;
+        if (estadoDoc(exp) !== "enviado-logistica") exp.docEstado = "en-edicion";
+        RequerimientosDB.registrarHistorial(exp, "Guardó una nueva versión del documento", exp.versiones.length);
+        RequerimientosDB.actualizarExpediente(exp);
+        try { localStorage.setItem(REC_KEY + exp.id, JSON.stringify({ ts: Date.now(), doc: docActual })); } catch (e) { /* noop */ }
+        estadoGuardado = "guardado";
+        setAutosaveUI("Versión guardada ✓", "is-saved");
+        toast(`Versión ${exp.versiones.length} guardada.`);
+    }
+
+    /* ---------- Tabla dinámica ---------- */
+
+    function filaVacia() {
+        const f = {};
+        docActual.columnas.forEach((c) => { f[c.id] = ""; });
+        return f;
+    }
+
+    function agregarColumna() {
+        const id = "col_" + Math.random().toString(36).slice(2, 7);
+        docActual.columnas.push({ id, titulo: "Columna", ancho: 120, align: "left" });
+        docActual.filas.forEach((f) => { f[id] = ""; });
+        renderSheet();
+        refrescarCalidad();
+        programarAutosave();
+    }
+
+    function eliminarColumna(i) {
+        if (docActual.columnas.length <= 1) { toast("Debe quedar al menos una columna.", "error"); return; }
+        const id = docActual.columnas[i].id;
+        docActual.columnas.splice(i, 1);
+        docActual.filas.forEach((f) => { delete f[id]; });
+        renderSheet();
+        refrescarCalidad();
+        programarAutosave();
+    }
+
+    function moverColumna(i, dir) {
+        const j = i + dir;
+        if (j < 0 || j >= docActual.columnas.length) return;
+        const a = docActual.columnas;
+        const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+        renderSheet();
+        programarAutosave();
+    }
+
+    function iniciarResize(handle, point) {
+        sincronizarModelo();
+        const ci = parseInt(handle.dataset.colResize, 10);
+        const table = sheetEl() && sheetEl().querySelector(".dx-table");
+        if (!table) return;
+        const col = table.querySelectorAll("colgroup col")[ci + 1];
+        const startW = col ? col.getBoundingClientRect().width : (docActual.columnas[ci].ancho || 100);
+        resize = { ci, startX: point.clientX, startW, col };
+        undoStack.push(clon(docActual));
+        if (undoStack.length > 80) undoStack.shift();
+        redoStack = [];
+        actualizarUndoUI();
+        document.addEventListener("mousemove", moverResize);
+        document.addEventListener("mouseup", finResize);
+        document.addEventListener("touchmove", moverResizeTouch, { passive: false });
+        document.addEventListener("touchend", finResize);
+    }
+
+    function moverResize(e) {
+        if (!resize) return;
+        const w = Math.max(40, resize.startW + (e.clientX - resize.startX));
+        if (resize.col) resize.col.style.width = w + "px";
+        docActual.columnas[resize.ci].ancho = Math.round(w);
+    }
+
+    function moverResizeTouch(e) {
+        if (!resize || !e.touches[0]) return;
+        e.preventDefault();
+        moverResize(e.touches[0]);
+    }
+
+    function finResize() {
+        if (!resize) return;
+        resize = null;
+        document.removeEventListener("mousemove", moverResize);
+        document.removeEventListener("mouseup", finResize);
+        document.removeEventListener("touchmove", moverResizeTouch);
+        document.removeEventListener("touchend", finResize);
+        programarAutosave();
+    }
+
+    /* ---------- Formato en línea (negrita/cursiva/subrayado) ---------- */
+
+    function ejecutarCmd(cmd) {
+        sincronizarModelo();
+        const before = clon(docActual);
+        try { document.execCommand(cmd, false, null); } catch (e) { /* navegador sin soporte */ }
+        undoStack.push(before);
+        if (undoStack.length > 80) undoStack.shift();
+        redoStack = [];
+        actualizarUndoUI();
+        sincronizarModelo();
+        programarAutosave();
+    }
+
+    function aplicarFmtLive(el) {
+        const k = el.dataset.fmtLive;
+        const v = (el.type === "range") ? parseFloat(el.value) : el.value;
+        docActual[k] = v;
+        if (k === "logoSize") {
+            const s = sheetEl();
+            const img = s && s.querySelector(".dx-sheet-logo-img, .dx-sheet-logo-mono");
+            if (img) {
+                if (img.classList.contains("dx-sheet-logo-mono")) { img.style.width = v + "px"; img.style.height = v + "px"; }
+                else { img.style.height = v + "px"; }
+            }
+        } else {
+            aplicarEstiloHoja();
+        }
+        programarAutosave();
+    }
+
+    /* ---------- Descargar / Imprimir / Vista previa ---------- */
+
     function expCompatible(doc, exp) {
         return {
-            codigo: exp.codigo, obra: exp.obra, partida: exp.partida,
-            requeridoPor: exp.requeridoPor, cargoRequerido: exp.cargoRequerido,
-            recibidoPor: exp.recibidoPor, cargoRecibido: exp.cargoRecibido,
-            lugarEntrega: doc.lugarEntrega || exp.lugarEntrega,
-            fecha: exp.fecha, fechaMaxima: exp.fechaMaxima,
-            observacionesGenerales: doc.observaciones || exp.observacionesGenerales,
-            materiales: doc.filas.map((f) => ({
-                descripcion: f.descripcion, um: f.um,
-                cantidad: f.cantidad, observaciones: f.observaciones
+            codigo: exp.codigo,
+            obra: txt(doc.dg.obra) || exp.obra,
+            partida: txt(doc.dg.partida) || exp.partida,
+            requeridoPor: txt(doc.dg.requeridoPor),
+            cargoRequerido: txt(doc.dg.cargoRequerido),
+            recibidoPor: txt(doc.dg.recibidoPor),
+            cargoRecibido: txt(doc.dg.cargoRecibido),
+            lugarEntrega: txt(doc.lugarEntrega) || exp.lugarEntrega,
+            fecha: txt(doc.dg.fecha) || exp.fecha,
+            fechaMaxima: txt(doc.dg.fechaMaxima) || exp.fechaMaxima,
+            observacionesGenerales: txt(doc.observaciones),
+            materiales: (doc.filas || []).map((f) => ({
+                descripcion: txt(f.descripcion),
+                um: txt(f.um),
+                cantidad: txt(f.cantidad),
+                observaciones: txt(f.observaciones)
             }))
         };
     }
 
-    function descargar(tipo) {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        const compat = expCompatible(docActual, exp);
-        if (tipo === "pdf") DocumentGenerator.descargarPDF(compat);
-        else if (tipo === "word") DocumentGenerator.descargarWord(compat);
-        else DocumentGenerator.descargarExcel(compat);
+    function descargarDoc(doc, exp, tipo) {
+        const c = expCompatible(doc, exp);
+        if (tipo === "pdf") DocumentGenerator.descargarPDF(c);
+        else if (tipo === "word") DocumentGenerator.descargarWord(c);
+        else DocumentGenerator.descargarExcel(c);
         toast(`Generando ${tipo.toUpperCase()}…`);
     }
 
-    function imprimir() {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        const hojaHTML = pintarHoja(docActual, exp, false);
-        const ventana = window.open("", "_blank");
-        if (!ventana) { toast("Habilita las ventanas emergentes para imprimir.", "error"); return; }
-        ventana.document.write(`
-            <html><head><meta charset="utf-8"><title>${esc(exp.expCodigo)}</title>
+    function imprimirDoc(doc, exp) {
+        const html = pintarHoja(doc, exp, false);
+        const w = window.open("", "_blank");
+        if (!w) { toast("Habilita las ventanas emergentes para imprimir.", "error"); return; }
+        w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(exp.expCodigo)}</title>
             <style>
-                body{font-family:'${docActual.fuente}',Arial,sans-serif;color:${docActual.colorTexto};margin:0;padding:20px}
-                .doc-paper{max-width:800px;margin:auto}
-                .doc-paper-head{display:flex;gap:16px;align-items:center;border-bottom:3px solid ${docActual.colorPrimario};padding-bottom:12px;margin-bottom:14px}
-                .doc-logo-center{justify-content:center}.doc-logo-right{flex-direction:row-reverse}
-                .doc-logo-mono{display:inline-flex;align-items:center;justify-content:center;background:${docActual.colorPrimario};color:#fff;font-weight:700;border-radius:8px;font-size:28px}
-                .doc-empresa strong{display:block;font-size:16px;color:${docActual.colorPrimario}}
-                .doc-empresa span{display:block;font-size:11px;color:#555}
-                .doc-doc-title{color:${docActual.colorPrimario};margin:0 0 4px;font-size:20px}
-                .doc-info{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:14px 0;font-size:12px}
-                .doc-info span{display:block;color:#777;font-size:10px;text-transform:uppercase}
-                table.doc-table{width:100%;border-collapse:collapse;font-size:12px;margin:10px 0}
-                .doc-table th,.doc-table td{border:1px solid #999;padding:6px 8px;text-align:left}
-                .doc-table th{background:${docActual.colorPrimario};color:#fff}
-                .doc-firmas{display:flex;gap:40px;margin-top:48px}
-                .doc-firma{flex:1;text-align:center}.doc-firma-line{border-top:1px solid #333;margin-bottom:6px}
-                .doc-paper-foot{margin-top:30px;border-top:1px solid #ccc;padding-top:8px;font-size:10px;color:#777;text-align:center}
-                .doc-obs-label{font-size:10px;text-transform:uppercase;color:#777}
-            </style></head>
-            <body>${hojaHTML}<script>window.onload=function(){window.print();}<\/script></body></html>`);
-        ventana.document.close();
+                *{box-sizing:border-box}
+                body{margin:0;padding:18px;background:#fff;color:${doc.colorTexto};font-family:'${doc.fuente}',Arial,sans-serif}
+                .dx-sheet{--dx-primary:${doc.colorPrimario};--dx-text:${doc.colorTexto};--dx-border:${doc.colorBorde};--dx-bw:${doc.bordeAncho}px;max-width:900px;margin:0 auto;font-size:${doc.fontSize}px;line-height:${doc.interlineado}}
+                .dx-sheet-head{display:flex;gap:16px;align-items:center;border-bottom:3px solid var(--dx-primary);padding-bottom:12px}
+                .dx-logo-center{justify-content:center}.dx-logo-right .dx-sheet-logo{order:3}
+                .dx-sheet-logo-mono{display:inline-flex;align-items:center;justify-content:center;background:var(--dx-primary);color:#fff;font-weight:700;border-radius:8px}
+                .dx-sheet-empresa{flex:1}.dx-sheet-empresa strong{display:block;color:var(--dx-primary);font-size:1.3em}.dx-sheet-empresa span{display:block;font-size:.8em;color:#555}
+                .dx-sheet-codes{display:grid;grid-template-columns:auto auto;gap:2px 8px;font-size:.72em;text-align:right}
+                .dx-sheet-codes span{color:#888}
+                .dx-sheet-title{margin:14px 0}.dx-sheet-title h1{color:var(--dx-primary);font-size:1.5em;margin:0}.dx-sheet-title p{margin:2px 0 0;color:#555}
+                .dx-sheet-dg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px 12px;background:#f7f7f4;border:1px solid #e6e3da;border-radius:6px;padding:12px;margin:12px 0}
+                .dx-dg-wide{grid-column:span 2}
+                .dx-sheet-dg span{display:block;color:#888;font-size:.7em;text-transform:uppercase}
+                .dx-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:.9em}
+                .dx-table th,.dx-table td{border:var(--dx-bw) solid var(--dx-border);padding:6px 8px;text-align:left}
+                .dx-table thead th{background:var(--dx-primary);color:#fff}
+                .dx-sheet-obs{margin:14px 0}.dx-sheet-obs-label{font-size:.7em;text-transform:uppercase;color:#888}
+                .dx-sheet-obs-text{border:1px solid #e6e3da;border-radius:6px;padding:8px;min-height:40px}
+                .dx-sheet-foot{margin-top:24px}.dx-sheet-lugar span{font-size:.7em;text-transform:uppercase;color:#888;display:block}
+                .dx-sheet-firmas{display:flex;gap:36px;margin-top:42px}
+                .dx-firma{flex:1;text-align:center}.dx-firma-line{border-top:1px solid #333;margin-bottom:6px}
+                .dx-firma strong{display:block;font-size:.9em}.dx-firma span{font-size:.78em;color:#777}
+                .dx-col-tools,.dx-col-resize,.dx-th-acc,.dx-td-acc,.dx-add-row{display:none!important}
+            </style></head><body>${html}<script>window.onload=function(){window.print();}<\/script></body></html>`);
+        w.document.close();
     }
 
-    // ENVIAR A LOGÍSTICA: proceso único (validar, guardar, generar,
-    // asociar, enviar, cambiar estado, bloquear y registrar historial).
-    function enviarLogistica() {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        const { errores } = validar(docActual, exp);
+    function vistaPrevia(id) {
+        const exp = RequerimientosDB.buscarExpediente(id);
+        if (!exp) return;
+        let doc;
+        if (abiertoId === exp.id && docActual) { sincronizarModelo(); doc = docActual; }
+        else doc = obtenerDoc(exp);
 
-        if (errores.length > 0) {
-            panel = "calidad";
-            repintarMain();
-            toast("Corrige los errores del Panel de Calidad antes de enviar.", "error");
+        const ov = document.createElement("div");
+        ov.className = "dx-preview-overlay";
+        ov.id = "dx-preview-overlay";
+        ov.innerHTML = `
+            <div class="dx-preview-top">
+                <span class="dx-preview-top-title">Vista previa · ${esc(exp.expCodigo)} · ${esc(exp.obra)}</span>
+                <div class="dx-preview-top-actions">
+                    <button type="button" data-pv="imprimir">Imprimir</button>
+                    <button type="button" data-pv="cerrar">Cerrar</button>
+                </div>
+            </div>
+            <div class="dx-preview-body zv-no-scrollbar">${pintarHoja(doc, exp, false)}</div>`;
+        document.body.appendChild(ov);
+        document.body.classList.add("dx-editor-open");
+        ov.addEventListener("click", (e) => {
+            const b = e.target.closest("[data-pv]");
+            if (!b) return;
+            if (b.dataset.pv === "cerrar") {
+                ov.remove();
+                if (!document.getElementById("dx-editor-overlay")) document.body.classList.remove("dx-editor-open");
+            } else if (b.dataset.pv === "imprimir") {
+                imprimirDoc(doc, exp);
+            }
+        });
+    }
+
+    /* ---------- ENVIAR A LOGÍSTICA ---------- */
+
+    function enviarLogistica(desdeEditor) {
+        const exp = RequerimientosDB.buscarExpediente(desdeEditor ? abiertoId : seleccionId);
+        if (!exp) return;
+
+        let doc;
+        if (desdeEditor) { sincronizarModelo(); doc = docActual; }
+        else doc = obtenerDoc(exp);
+
+        const r = validarDoc(doc, exp);
+        if (!r.ok) {
+            if (!desdeEditor) {
+                abrirEditor(exp.id);
+                doc = docActual;
+            }
+            resaltarPrimerError(validarDoc(docActual, expActual));
+            toast("Corrige los errores señalados antes de enviar a Logística.", "error");
             return;
         }
 
-        // 1) Guardar cambios.
-        exp.documento = clon(docActual);
-        // 2-4) Generar y asociar PDF / Word / Excel al Expediente.
+        // Guardar + generar y asociar PDF / Word / Excel.
+        exp.documento = clon(doc);
+        exp.documentoTs = Date.now();
         RequerimientosDB.registrarDocumentos(exp);
         exp.documentosAsociados = true;
-        // Conserva una copia inmutable de la versión enviada.
         if (!Array.isArray(exp.versiones)) exp.versiones = [];
-        exp.versiones.push({ version: exp.version || 1, doc: clon(docActual), enviadoEn: Date.now() });
-        // 5-6) Enviar a Logística + cambiar estado.
-        exp.estado = "enviado";              // compatible con el Panel de Control
-        exp.docEstado = "enviado-logistica"; // ciclo de vida del Documento
+        exp.versiones.push({ version: exp.versiones.length + 1, doc: clon(doc), enviadoEn: Date.now() });
+        exp.version = exp.versiones.length;
+        // Enviar: cambia estado, marca enviado y bloquea edición.
+        exp.estado = "enviado";
+        exp.docEstado = "enviado-logistica";
         exp.enviadoLogistica = true;
-        // 7) Bloquear edición.
         exp.bloqueado = true;
-        // 8) Registrar historial.
-        RequerimientosDB.registrarHistorial(exp, "Enviado a Logística (PDF, Word y Excel asociados)", exp.version || 1);
+        exp.archivadoEn = Date.now();
+        RequerimientosDB.registrarHistorial(exp, "Enviado a Logística y archivado (PDF, Word y Excel)", exp.versiones.length);
         RequerimientosDB.actualizarExpediente(exp);
+        try { localStorage.removeItem(REC_KEY + exp.id); } catch (e) { /* noop */ }
 
-        modo = "edicion"; panel = null;
-        repintarMeta();
-        repintarSidebar();
-        repintarMain();
-        toast("Expediente enviado a Logística. Documento bloqueado.");
-    }
-
-    // Crear nueva versión editable tras un envío (nunca toca la enviada).
-    function nuevaVersion() {
-        const exp = RequerimientosDB.buscarExpediente(seleccionId);
-        exp.version = (exp.version || 1) + 1;
-        exp.bloqueado = false;
-        exp.docEstado = "en-edicion";
-        docActual = clon(exp.documento || construirDoc(exp));
-        RequerimientosDB.registrarHistorial(exp, "Creó nueva versión para corrección", exp.version);
-        RequerimientosDB.actualizarExpediente(exp);
-        undoStack = []; redoStack = [];
-        repintarMeta();
-        repintarSidebar();
-        repintarMain();
-        toast(`Versión ${exp.version} creada. Ya puedes editar.`);
-    }
-
-    function sembrar() {
-        RequerimientosDB.sembrarEjemplos();
+        // Cierra el editor, sale de la lista de activos y vuelve al
+        // administrador (el expediente queda en Archivo automáticamente).
+        descartarEditor();
+        const restantes = listarActivos();
+        seleccionId = restantes[0] ? restantes[0].id : null;
         ReqWorkspace.render("documentos");
-        toast("Ejemplos cargados.");
+        mostrarMensajePrimerEnvio();
     }
 
-    function seleccionar(id) {
-        seleccionId = id;
+    function mostrarMensajePrimerEnvio() {
+        const clave = MSG_KEY + (usuarioActual() || "u");
+        let visto = false;
+        try { visto = localStorage.getItem(clave) === "1"; } catch (e) { visto = false; }
+        if (visto) { toast("Expediente enviado a Logística y archivado."); return; }
+        try { localStorage.setItem(clave, "1"); } catch (e) { /* noop */ }
+
+        const ov = document.createElement("div");
+        ov.className = "dx-msg-overlay";
+        ov.id = "dx-msg-overlay";
+        ov.innerHTML = `
+            <div class="dx-msg-card">
+                <div class="dx-msg-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                </div>
+                <h3>Expediente enviado correctamente</h3>
+                <p>Tu expediente fue enviado correctamente a Logística. Ahora se encuentra almacenado en <strong>Archivo</strong>, donde podrás consultarlo, descargarlo e imprimirlo cuando lo necesites.</p>
+                <button type="button" class="nr-btn nr-btn-primary" data-msg-ok>Entendido</button>
+            </div>`;
+        document.body.appendChild(ov);
+        ov.addEventListener("click", (e) => {
+            if (e.target.closest("[data-msg-ok]") || e.target === ov) ov.remove();
+        });
+    }
+
+    /* ---------- Apertura / cierre del editor ---------- */
+
+    function abrirEditor(id) {
         const exp = RequerimientosDB.buscarExpediente(id);
-        docActual = exp.documento ? clon(exp.documento) : construirDoc(exp);
+        if (!exp) return;
+
+        descartarEditor();
+
+        abiertoId = id;
+        expActual = exp;
+        docActual = recuperarOCargar(exp);
+        const recuperado = !!docActual.__recuperado;
+        if (recuperado) delete docActual.__recuperado;
+
         undoStack = []; redoStack = []; snapshotPendiente = null;
-        modo = "edicion"; panel = null;
-        repintarMeta();
-        repintarSidebar();
-        repintarMain();
+        estadoGuardado = "guardado";
+        menuDescarga = false; calidadColapsada = false;
+
+        const est = ESTADOS[estadoDoc(exp)] || ESTADOS["listo"];
+        const ov = document.createElement("div");
+        ov.className = "dx-editor-overlay";
+        ov.id = "dx-editor-overlay";
+        ov.innerHTML = `
+            <div class="dx-editor" id="dx-editor">
+                ${pintarTopBar(exp, est)}
+                ${pintarFormatBar(docActual)}
+                <div class="dx-editor-stage">
+                    <div class="dx-editor-scroll zv-no-scrollbar" id="dx-editor-scroll">
+                        ${pintarHoja(docActual, exp, true)}
+                    </div>
+                    ${pintarCalidad()}
+                </div>
+                <div class="dx-toast" id="dx-toast-ed" hidden></div>
+                <input type="file" accept="image/*" id="dx-logo-input" hidden>
+            </div>`;
+        document.body.appendChild(ov);
+        document.body.classList.add("dx-editor-open");
+
+        wireEditor(ov);
+        actualizarUndoUI();
+
+        if (recuperado) toast("Recuperamos tu trabajo no guardado.");
     }
 
-    /* ---------- Lectura de ediciones de la hoja hacia el modelo ---------- */
-
-    function leerEdicion(el) {
-        if (el.dataset.doc) {
-            docActual[el.dataset.doc] = el.innerText;
-        } else if (el.dataset.cell !== undefined && el.dataset.row !== undefined) {
-            const fila = docActual.filas[parseInt(el.dataset.row, 10)];
-            if (fila) fila[el.dataset.col] = el.innerText;
+    function descartarEditor() {
+        clearTimeout(autosaveTimer);
+        clearTimeout(calidadTimer);
+        const ov = document.getElementById("dx-editor-overlay");
+        if (ov) ov.remove();
+        const pv = document.getElementById("dx-preview-overlay");
+        if (pv) pv.remove();
+        document.body.classList.remove("dx-editor-open");
+        abiertoId = null;
+        expActual = null;
+        if (beforeUnloadAttached) {
+            window.removeEventListener("beforeunload", flushAutosave);
+            document.removeEventListener("visibilitychange", onVisibility);
+            beforeUnloadAttached = false;
         }
     }
 
-    /* ---------- MONTAJE / WIRING (delegación en el contenedor) ---------- */
+    /* ---------- Wiring del editor (delegación en el overlay) ---------- */
 
-    function montar(ws, params) {
-        const cont = ws.querySelector("#doc-container");
-        if (!cont) return;
+    function cerrarMenuEd() {
+        const m = document.getElementById("dx-menu-ed");
+        if (m) m.classList.remove("is-open");
+    }
 
-        // ----- CLICKS -----
-        cont.addEventListener("click", (e) => {
+    function manejarClickEditor(e) {
+        const cmd = e.target.closest("[data-cmd]");
+        if (cmd) { ejecutarCmd(cmd.dataset.cmd); return; }
 
-            // Selección de expediente en el panel izquierdo.
-            const sel = e.target.closest("[data-doc-sel]");
-            if (sel) { seleccionar(sel.dataset.docSel); return; }
+        const seg = e.target.closest("[data-fmt-seg]");
+        if (seg) {
+            capturar();
+            docActual[seg.dataset.fmtSeg] = seg.dataset.val;
+            renderSheet();
+            pintarFormatBarRefresh();
+            programarAutosave();
+            return;
+        }
 
-            // Acciones de fila en la tabla.
-            const fila = e.target.closest("[data-doc-row]");
-            if (fila) {
-                capturar();
-                if (fila.dataset.docRow === "add") {
-                    docActual.filas.push({ um: "", cantidad: "", descripcion: "", fechaMax: "", observaciones: "" });
-                } else {
-                    docActual.filas.splice(parseInt(fila.dataset.row, 10), 1);
-                }
-                repintarMain();
-                return;
+        if (e.target.closest("[data-col-add]")) { capturar(); agregarColumna(); return; }
+        const cmove = e.target.closest("[data-col-move]");
+        if (cmove) { capturar(); moverColumna(parseInt(cmove.dataset.colMove, 10), parseInt(cmove.dataset.dir, 10)); return; }
+        const cdel = e.target.closest("[data-col-del]");
+        if (cdel) { capturar(); eliminarColumna(parseInt(cdel.dataset.colDel, 10)); return; }
+
+        if (e.target.closest("[data-row-add]")) {
+            capturar();
+            docActual.filas.push(filaVacia());
+            renderSheet();
+            refrescarCalidad();
+            programarAutosave();
+            return;
+        }
+        const rdel = e.target.closest("[data-row-del]");
+        if (rdel) {
+            capturar();
+            docActual.filas.splice(parseInt(rdel.dataset.rowDel, 10), 1);
+            renderSheet();
+            refrescarCalidad();
+            programarAutosave();
+            return;
+        }
+
+        const dl = e.target.closest("[data-ed-dl]");
+        if (dl) {
+            sincronizarModelo();
+            descargarDoc(docActual, RequerimientosDB.buscarExpediente(abiertoId), dl.dataset.edDl);
+            menuDescarga = false; cerrarMenuEd();
+            return;
+        }
+
+        const goto = e.target.closest("[data-goto]");
+        if (goto) { irAlCampo(goto.dataset.goto); return; }
+
+        if (e.target.closest("[data-quality-toggle]")) {
+            calidadColapsada = !calidadColapsada;
+            const q = document.getElementById("dx-quality");
+            if (q) q.classList.toggle("is-collapsed", calidadColapsada);
+            return;
+        }
+
+        const ed = e.target.closest("[data-ed]");
+        if (ed) {
+            const a = ed.dataset.ed;
+            if (a === "volver") { seleccionId = abiertoId; flushAutosave(); ReqWorkspace.render("documentos"); }
+            else if (a === "undo") deshacer();
+            else if (a === "redo") rehacer();
+            else if (a === "guardar") guardarManual();
+            else if (a === "imprimir") { sincronizarModelo(); imprimirDoc(docActual, expActual); }
+            else if (a === "enviar") enviarLogistica(true);
+            else if (a === "logo") { const inp = document.getElementById("dx-logo-input"); if (inp) inp.click(); }
+            else if (a === "descargar") {
+                menuDescarga = !menuDescarga;
+                const m = document.getElementById("dx-menu-ed");
+                if (m) m.classList.toggle("is-open", menuDescarga);
             }
+            return;
+        }
 
-            // Segmentos de formato (alineación / posición de logo).
-            const seg = e.target.closest('[data-doc-fmt="alinear"], [data-doc-fmt="logoPos"]');
-            if (seg) {
-                capturar();
-                docActual[seg.dataset.docFmt] = seg.dataset.val;
-                repintarMain();
-                return;
+        if (!e.target.closest(".dx-menu-wrap")) { menuDescarga = false; cerrarMenuEd(); }
+    }
+
+    function manejarInputEditor(e) {
+        const ed = e.target.closest('[data-edit],[data-dg],[data-cell],[data-firma],[data-firma-rol],[data-coltitle]');
+        if (ed) {
+            if (snapshotPendiente) {
+                undoStack.push(snapshotPendiente);
+                if (undoStack.length > 80) undoStack.shift();
+                redoStack = [];
+                snapshotPendiente = null;
+                actualizarUndoUI();
             }
+            programarCalidad();
+            programarAutosave();
+            return;
+        }
+        const live = e.target.closest("[data-fmt-live]");
+        if (live) { aplicarFmtLive(live); return; }
+    }
 
-            // Menú de descarga.
-            const item = e.target.closest("[data-doc-download]");
-            if (item) { descargar(item.dataset.docDownload); menuDescargaAbierto = false; cerrarMenu(); return; }
+    function manejarChangeEditor(e) {
+        const sel = e.target.closest("[data-fmt-sel]");
+        if (sel) {
+            capturar();
+            docActual[sel.dataset.fmtSel] = (sel.dataset.fmtSel === "fontSize") ? parseInt(sel.value, 10) : sel.value;
+            aplicarEstiloHoja();
+            programarAutosave();
+            return;
+        }
+        const file = e.target.closest("#dx-logo-input");
+        if (file && file.files && file.files[0]) {
+            const fr = new FileReader();
+            fr.onload = () => { capturar(); docActual.logoUrl = fr.result; renderSheet(); programarAutosave(); };
+            fr.readAsDataURL(file.files[0]);
+        }
+    }
 
-            // Herramientas de la barra.
-            const tool = e.target.closest("[data-doc-tool]");
-            if (tool) {
-                const accion = tool.dataset.docTool;
-                if (accion === "undo") deshacer();
-                else if (accion === "redo") rehacer();
-                else if (accion === "guardar") guardarCambios(false);
-                else if (accion === "regenerar") regenerar();
-                else if (accion === "preview") alternarPreview();
-                else if (accion === "calidad") alternarPanel("calidad");
-                else if (accion === "historial") alternarPanel("historial");
-                else if (accion === "imprimir") imprimir();
-                else if (accion === "enviar") enviarLogistica();
-                else if (accion === "nueva-version") nuevaVersion();
-                else if (accion === "sembrar") sembrar();
-                else if (accion === "descargar") { menuDescargaAbierto = !menuDescargaAbierto; toggleMenu(); }
-                return;
-            }
-
-            // Clic fuera del menú de descarga -> cerrar.
-            if (!e.target.closest(".doc-menu-wrap")) { menuDescargaAbierto = false; cerrarMenu(); }
+    function wireEditor(ov) {
+        ov.addEventListener("mousedown", (e) => {
+            if (e.target.closest("[data-cmd]")) { e.preventDefault(); }   // conserva la selección de texto
+            const rz = e.target.closest("[data-col-resize]");
+            if (rz) { e.preventDefault(); iniciarResize(rz, e); }
         });
+        ov.addEventListener("touchstart", (e) => {
+            const rz = e.target.closest("[data-col-resize]");
+            if (rz && e.touches[0]) iniciarResize(rz, e.touches[0]);
+        }, { passive: true });
 
-        // ----- EDICIÓN EN LÍNEA + FILTROS + RANGOS/COLORES -----
-        cont.addEventListener("input", (e) => {
-            const editable = e.target.closest("[data-doc], [data-cell]");
-            if (editable) {
-                // Captura un único snapshot por sesión de edición de campo.
-                if (snapshotPendiente !== null) {
-                    undoStack.push(snapshotPendiente);
-                    if (undoStack.length > 60) undoStack.shift();
-                    redoStack = [];
-                    snapshotPendiente = null;
-                    actualizarUndoUI();
-                }
-                leerEdicion(editable);
-                return;
-            }
-
-            const filtro = e.target.closest("[data-doc-filter]");
-            if (filtro) { repintarSidebar(); return; }
-
-            const fmt = e.target.closest('[data-doc-fmt="margen"], [data-doc-fmt="colorPrimario"], [data-doc-fmt="colorTexto"]');
-            if (fmt) {
-                docActual[fmt.dataset.docFmt] = (fmt.type === "range") ? parseInt(fmt.value, 10) : fmt.value;
-                // Aplica el estilo sin re-render para conservar la edición.
-                aplicarEstiloHoja();
-                return;
-            }
-        });
-
-        // Captura del estado al ENTRAR a editar un campo (para deshacer).
-        cont.addEventListener("focusin", (e) => {
-            if (e.target.closest("[data-doc], [data-cell]")) {
+        ov.addEventListener("click", manejarClickEditor);
+        ov.addEventListener("input", manejarInputEditor);
+        ov.addEventListener("change", manejarChangeEditor);
+        ov.addEventListener("focusin", (e) => {
+            if (e.target.closest('[data-edit],[data-dg],[data-cell],[data-firma],[data-firma-rol],[data-coltitle]')) {
+                sincronizarModelo();
                 snapshotPendiente = clon(docActual);
             }
         });
 
-        // ----- CAMBIOS (selects de filtro/fuente + carga de logo) -----
-        cont.addEventListener("change", (e) => {
-            const filtro = e.target.closest("[data-doc-filter]");
-            if (filtro) { repintarSidebar(); return; }
+        window.addEventListener("beforeunload", flushAutosave);
+        document.addEventListener("visibilitychange", onVisibility);
+        beforeUnloadAttached = true;
+    }
 
-            const fuente = e.target.closest('[data-doc-fmt="fuente"]');
-            if (fuente) { capturar(); docActual.fuente = fuente.value; aplicarEstiloHoja(); return; }
+    /* ---------- Ejemplos ---------- */
 
-            const logo = e.target.closest('[data-doc-fmt="logoUpload"]');
-            if (logo && logo.files && logo.files[0]) {
-                const lector = new FileReader();
-                lector.onload = () => { capturar(); docActual.logoUrl = lector.result; repintarMain(); };
-                lector.readAsDataURL(logo.files[0]);
+    function sembrar() {
+        RequerimientosDB.sembrarEjemplos();
+        ReqWorkspace.render("documentos");
+    }
+
+    /* ---------- Toast (editor o administrador) ---------- */
+
+    function toast(msg, tipo) {
+        const t = document.getElementById("dx-toast-ed") || document.getElementById("dx-toast");
+        if (!t) return;
+        t.className = `dx-toast is-${tipo || "ok"}`;
+        t.textContent = msg;
+        t.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { t.hidden = true; }, 3400);
+    }
+
+    /* ---------- MONTAJE del administrador (delegación) ---------- */
+
+    function montar(ws, params) {
+        const cont = ws.querySelector("#dx-root");
+        if (!cont) return;
+
+        cont.addEventListener("input", (e) => {
+            if (e.target.id === "dx-search") repintarLista();
+        });
+
+        cont.addEventListener("click", (e) => {
+            const sel = e.target.closest("[data-dx-sel]");
+            if (sel) { seleccionarAdmin(sel.dataset.dxSel); return; }
+
+            const dl = e.target.closest("[data-dx-dl]");
+            if (dl) {
+                const exp = RequerimientosDB.buscarExpediente(seleccionId);
+                if (exp) descargarDoc(obtenerDoc(exp), exp, dl.dataset.dxDl);
+                menuDescargaDet = false;
+                const m = document.getElementById("dx-menu-det");
+                if (m) m.classList.remove("is-open");
+                return;
+            }
+
+            const act = e.target.closest("[data-dx-act]");
+            if (act) {
+                const a = act.dataset.dxAct;
+                if (a === "editar") abrirEditor(seleccionId);
+                else if (a === "preview") vistaPrevia(seleccionId);
+                else if (a === "imprimir") {
+                    const exp = RequerimientosDB.buscarExpediente(seleccionId);
+                    if (exp) imprimirDoc(obtenerDoc(exp), exp);
+                } else if (a === "enviar") enviarLogistica(false);
+                else if (a === "descargar-menu") {
+                    menuDescargaDet = !menuDescargaDet;
+                    const m = document.getElementById("dx-menu-det");
+                    if (m) m.classList.toggle("is-open", menuDescargaDet);
+                } else if (a === "sembrar") sembrar();
+                return;
+            }
+
+            if (!e.target.closest(".dx-menu-wrap")) {
+                menuDescargaDet = false;
+                const m = document.getElementById("dx-menu-det");
+                if (m) m.classList.remove("is-open");
             }
         });
 
-        actualizarUndoUI();
-    }
-
-    // Aplica color/tipografía/márgenes directamente sobre la hoja
-    // (evita re-render para no interrumpir la edición de texto).
-    function aplicarEstiloHoja() {
-        const hoja = root() && root().querySelector("#doc-sheet");
-        if (!hoja) return;
-        hoja.style.setProperty("--doc-primary", docActual.colorPrimario);
-        hoja.style.setProperty("--doc-text", docActual.colorTexto);
-        hoja.style.fontFamily = `'${docActual.fuente}',Arial,sans-serif`;
-        hoja.style.padding = `${docActual.margen}px`;
-    }
-
-    function toggleMenu() {
-        const m = root() && root().querySelector("#doc-menu-descarga");
-        if (m) m.classList.toggle("is-open", menuDescargaAbierto);
-    }
-    function cerrarMenu() {
-        const m = root() && root().querySelector("#doc-menu-descarga");
-        if (m) m.classList.remove("is-open");
+        // Apertura directa del editor cuando se solicita por parámetro.
+        if (params && params.editar && seleccionId) abrirEditor(seleccionId);
     }
 
     return { render, montar };
