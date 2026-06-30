@@ -4264,3 +4264,635 @@ select.cfg-input{ cursor: pointer; }
         flex: 1;
     }
 }
+
+/* ==========================================================
+   SUBMÓDULO DOCUMENTOS — BANDEJA
+   ----------------------------------------------------------
+   Bandeja limpia de documentos. Reutiliza la identidad visual
+   del Dashboard (tokens --dash-*). Solo muestra los datos
+   solicitados y un único botón de acciones (⋮).
+   ========================================================== */
+
+.zdoc-bandeja{
+    display: block;
+}
+
+.zdoc-bandeja-head{
+    margin-bottom: 18px;
+}
+
+.zdoc-bandeja-title{
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--dash-text);
+}
+
+.zdoc-bandeja-sub{
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--dash-text-soft);
+}
+
+.zdoc-bj-wrap{
+    overflow-x: auto;
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.zdoc-bj{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+}
+
+.zdoc-bj thead th{
+    text-align: left;
+    padding: 12px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--dash-text-soft);
+    background: var(--dash-sidebar);
+    border-bottom: 1px solid var(--dash-border);
+    white-space: nowrap;
+}
+
+.zdoc-bj tbody td{
+    padding: 12px 14px;
+    color: var(--dash-text);
+    border-bottom: 1px solid var(--dash-border);
+    vertical-align: middle;
+}
+
+.zdoc-bj tbody tr:last-child td{
+    border-bottom: none;
+}
+
+.zdoc-bj-row{
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.zdoc-bj-row:hover{
+    background: var(--dash-hover);
+}
+
+.zdoc-bj-cod{
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.zdoc-bj-fecha{
+    white-space: nowrap;
+}
+
+.zdoc-bj-acc{
+    width: 48px;
+    text-align: right;
+}
+
+.zdoc-kebab{
+    background: transparent;
+    border: none;
+    padding: 4px 8px;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--dash-text-soft);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.zdoc-kebab:hover{
+    background: var(--dash-active);
+    color: var(--dash-text);
+}
+
+.zdoc-badge{
+    display: inline-block;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.zdoc-badge-documentos{
+    background: #FBF1D9;
+    color: #8A6D1F;
+}
+
+.zdoc-badge-archivo{
+    background: #E3F0E4;
+    color: #2F6B3A;
+}
+
+.zdoc-vacio{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+    padding: 54px 24px;
+    border: 1px dashed var(--dash-border);
+    border-radius: 12px;
+}
+
+.zdoc-vacio-icon{
+    width: 46px;
+    height: 46px;
+    color: var(--dash-text-soft);
+}
+
+.zdoc-vacio-icon svg{
+    width: 100%;
+    height: 100%;
+}
+
+.zdoc-vacio-text{
+    max-width: 420px;
+    font-size: 13.5px;
+    color: var(--dash-text-soft);
+}
+
+/* ==========================================================
+   SUBMÓDULO DOCUMENTOS — MENÚ DE TRES PUNTOS (⋮)
+   ========================================================== */
+
+.zdoc-menu{
+    position: fixed;
+    z-index: 4200;
+    min-width: 186px;
+    padding: 6px;
+    background: #fff;
+    border: 1px solid var(--dash-border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+}
+
+.zdoc-menu[hidden]{
+    display: none;
+}
+
+.zdoc-menu-item{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    font-size: 13.5px;
+    text-align: left;
+    color: var(--dash-text);
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+.zdoc-menu-item:hover{
+    background: var(--dash-hover);
+}
+
+.zdoc-menu-send{
+    color: #1F6B3A;
+    font-weight: 600;
+}
+
+.zdoc-menu-send[hidden]{
+    display: none;
+}
+
+.zdoc-menu-caret{
+    font-size: 11px;
+    color: var(--dash-text-soft);
+}
+
+.zdoc-submenu{
+    padding: 4px 0 4px 10px;
+}
+
+.zdoc-submenu[hidden]{
+    display: none;
+}
+
+/* ==========================================================
+   SUBMÓDULO DOCUMENTOS — AVISO TRANSITORIO (TOAST)
+   ========================================================== */
+
+.zdoc-toast{
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    z-index: 4300;
+    max-width: 90vw;
+    padding: 12px 18px;
+    font-size: 13.5px;
+    color: #fff;
+    background: #26241E;
+    border-radius: 10px;
+    transform: translateX(-50%) translateY(20px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+.zdoc-toast.is-visible{
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.zdoc-toast.is-error{
+    background: #7A2222;
+}
+
+.zdoc-toast.is-ok{
+    background: #1F5130;
+}
+
+/* ==========================================================
+   VISOR DOCUMENTAL A PANTALLA COMPLETA
+   ----------------------------------------------------------
+   Cubre toda la pantalla en cualquier dispositivo. El documento
+   conserva su tamaño A4 real; el visor aporta desplazamiento y
+   zoom. El documento nunca se reorganiza ni se deforma.
+   ========================================================== */
+
+.zviewer{
+    position: fixed;
+    inset: 0;
+    z-index: 4000;
+    display: flex;
+    flex-direction: column;
+    background: #525659;
+}
+
+.zviewer[hidden]{
+    display: none;
+}
+
+body.zviewer-open{
+    overflow: hidden;
+}
+
+.zviewer-bar{
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    color: #fff;
+    background: #2B2B2B;
+}
+
+.zviewer-info{
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.zviewer-title{
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.zviewer-sub{
+    font-size: 12px;
+    color: #B9B9B9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.zviewer-tools{
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.zviewer-btn{
+    padding: 6px 10px;
+    font-size: 13px;
+    color: #fff;
+    background: #3A3A3A;
+    border: 1px solid #4A4A4A;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.zviewer-btn:hover{
+    background: #4A4A4A;
+}
+
+.zviewer-zoom{
+    min-width: 58px;
+}
+
+.zviewer-close{
+    background: #5A2B2B;
+    border-color: #6B3434;
+}
+
+.zviewer-sep{
+    width: 1px;
+    height: 22px;
+    background: #4A4A4A;
+}
+
+.zviewer-stage{
+    flex: 1 1 auto;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    justify-content: safe center;
+    align-items: flex-start;
+    padding: 24px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.zviewer-canvas{
+    flex: 0 0 auto;
+}
+
+/* ==========================================================
+   PLANTILLA OFICIAL ÚNICA — DOCUMENTO A4
+   ----------------------------------------------------------
+   Reproducción digital del documento físico de referencia.
+   Tamaño A4 fijo (mm): no se reorganiza ni se deforma en
+   ningún dispositivo. Diseño sobrio: sin sombras, sin
+   degradados, sin bordes redondeados, sin efectos modernos.
+   ========================================================== */
+
+.zdoc-page{
+    width: 210mm;
+    min-height: 297mm;
+    box-sizing: border-box;
+    padding: 8mm;
+    background: #fff;
+    color: #000;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 8pt;
+    line-height: 1.25;
+}
+
+.zdoc-frame{
+    border: 1.4px solid #000;
+}
+
+.zdoc-page table{
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+/* --- Encabezado: logo + empresa + RUC + tipo de documento --- */
+
+.zdoc-encabezado td{
+    border: 1px solid #000;
+    padding: 2mm;
+    vertical-align: middle;
+}
+
+.zdoc-logo-cell{
+    text-align: center;
+}
+
+.zdoc-logo-img{
+    display: block;
+    margin: 0 auto;
+    max-width: 30mm;
+    max-height: 22mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+}
+
+.zdoc-logo-fallback{
+    display: inline-block;
+    font-size: 15pt;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+.zdoc-titulo-cell{
+    text-align: center;
+}
+
+.zdoc-empresa{
+    font-size: 12pt;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.zdoc-ruc{
+    margin-top: 1mm;
+    font-size: 8.5pt;
+}
+
+.zdoc-doctipo{
+    margin-top: 1.5mm;
+    padding: 1.4mm 2mm;
+    font-size: 9.5pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #10243F;
+    background: #BDD7EE;
+    border: 1px solid #000;
+}
+
+/* --- Cuadros de datos (meta) --- */
+
+.zdoc-meta{
+    margin-top: -1px;
+}
+
+.zdoc-meta td{
+    border: 1px solid #000;
+    padding: 1.6mm 2mm;
+    vertical-align: top;
+    word-break: break-word;
+}
+
+.zdoc-lbl{
+    font-size: 7pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    white-space: normal;
+}
+
+.zdoc-val{
+    font-size: 8.5pt;
+    min-height: 4mm;
+}
+
+.zdoc-val-strong{
+    font-weight: bold;
+}
+
+/* --- Tabla de materiales --- */
+
+.zdoc-tabla-mat{
+    margin-top: -1px;
+}
+
+.zdoc-tabla-mat th{
+    padding: 1.6mm 1mm;
+    font-size: 7.5pt;
+    font-weight: bold;
+    text-align: center;
+    text-transform: uppercase;
+    color: #10243F;
+    background: #BDD7EE;
+    border: 1px solid #000;
+}
+
+.zdoc-tabla-mat td{
+    padding: 1.3mm 2mm;
+    font-size: 8pt;
+    border: 1px solid #000;
+    vertical-align: top;
+}
+
+.zdoc-c-item,
+.zdoc-c-um,
+.zdoc-c-cant{
+    text-align: center;
+}
+
+.zdoc-c-desc,
+.zdoc-c-obs{
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.zdoc-fila-vacia td{
+    height: 6mm;
+}
+
+/* --- Lugar de entrega --- */
+
+.zdoc-lugar{
+    margin-top: -1px;
+}
+
+.zdoc-lugar td{
+    border: 1px solid #000;
+    padding: 1.6mm 2mm;
+    font-size: 8.5pt;
+    vertical-align: top;
+}
+
+/* --- Firmas --- */
+
+.zdoc-firmas{
+    margin-top: 16mm;
+}
+
+.zdoc-firmas td{
+    padding: 0 4mm;
+    text-align: center;
+    vertical-align: bottom;
+}
+
+.zdoc-firma-linea{
+    margin: 0 2mm;
+    border-top: 1px solid #000;
+}
+
+.zdoc-firma-rol{
+    margin-top: 1.6mm;
+    font-size: 8pt;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+/* No mostrar el visor / menú / toast al imprimir la app principal. */
+@media print{
+    #zviewer,
+    #zdoc-menu,
+    #zdoc-toast{
+        display: none !important;
+    }
+}
+
+/* ==========================================================
+   RESPONSIVE — SUBMÓDULO DOCUMENTOS
+   ----------------------------------------------------------
+   La bandeja se adapta a pantallas pequeñas (tarjetas). El
+   DOCUMENTO A4 nunca se adapta: lo gobierna el visor.
+   ========================================================== */
+
+@media (max-width: 640px){
+
+    .zdoc-bj thead{
+        display: none;
+    }
+
+    .zdoc-bj,
+    .zdoc-bj tbody,
+    .zdoc-bj tr,
+    .zdoc-bj td{
+        display: block;
+        width: 100%;
+    }
+
+    .zdoc-bj-row{
+        position: relative;
+        padding: 8px 4px;
+        border-bottom: 1px solid var(--dash-border);
+    }
+
+    .zdoc-bj tbody td{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 5px 14px;
+        border: none;
+    }
+
+    .zdoc-bj tbody td::before{
+        content: attr(data-label);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--dash-text-soft);
+    }
+
+    .zdoc-bj-acc{
+        position: absolute;
+        top: 6px;
+        right: 4px;
+        width: auto;
+        padding: 0;
+    }
+
+    .zdoc-bj-acc::before{
+        display: none;
+    }
+
+    .zviewer-sub{
+        display: none;
+    }
+
+    .zviewer-title{
+        max-width: 42vw;
+    }
+
+    .zviewer-btn{
+        padding: 6px 9px;
+    }
+
+    .zviewer-stage{
+        padding: 12px;
+    }
+}

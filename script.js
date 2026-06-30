@@ -1697,11 +1697,44 @@ const RequerimientosDB = (function () {
         return leer(K.documentos, []);
     }
 
+    // Lectura puntual de un Expediente por su código de requerimiento.
+    // La reutiliza el submódulo Documentos para resolver el documento
+    // completo a partir de la fila de la bandeja, sin duplicar datos.
+    function expedientePorCodigo(codigo) {
+        return listarExpedientes().find((e) => e.codigo === codigo) || null;
+    }
+
+    // Marca un Expediente como ENTREGADO a Logística. Reutiliza la
+    // misma colección de expedientes (no crea otra base de datos): solo
+    // añade trazabilidad de la entrega. A partir de aquí el submódulo
+    // Documentos deja de mostrarlo y el submódulo Archivo lo lista,
+    // quedando disponible para el módulo Logística.
+    function marcarEnviadoLogistica(codigo) {
+        const lista = listarExpedientes();
+        const idx = lista.findIndex((e) => e.codigo === codigo);
+        if (idx < 0) return null;
+        if (lista[idx].enviadoLogistica) return lista[idx];
+
+        lista[idx] = {
+            ...lista[idx],
+            enviadoLogistica: true,
+            entregadoLogisticaEn: Date.now(),
+            actualizadoEn: Date.now()
+        };
+        guardarColeccion(lista);
+
+        registrarActividad({ tipo: "logistica", texto: "Expediente enviado a Logística", codigo });
+        registrarNotificacion({ texto: `Expediente ${codigo} enviado a Logística`, codigo });
+
+        return lista[idx];
+    }
+
     return {
         obtenerObras, configObra, datosObra,
         sugerirCampo, sugerirPartidas, sugerirMateriales, umDeMaterial,
         listarExpedientes, guardarBorrador, generarExpediente,
-        listarActividad, listarNotificaciones, listarDocumentos
+        listarActividad, listarNotificaciones, listarDocumentos,
+        expedientePorCodigo, marcarEnviadoLogistica
     };
 })();
 
@@ -1800,178 +1833,441 @@ const DocumentGenerator = (function () {
         return PanelUtils.escapar(t == null ? "" : t);
     }
 
-    function fila(exp) {
-        return [
-            ["Código", exp.codigo],
-            ["Obra", exp.obra],
-            ["Partida", exp.partida],
-            ["Requerido por", `${exp.requeridoPor} (${exp.cargoRequerido || "—"})`],
-            ["Recibido por", `${exp.recibidoPor} (${exp.cargoRecibido || "—"})`],
-            ["Lugar de entrega", exp.lugarEntrega],
-            ["Fecha", exp.fecha],
-            ["Fecha máxima de ingreso", exp.fechaMaxima]
-        ];
+    // Carga html2canvas bajo demanda (igual patrón que jsPDF). Se usa
+    // solo para exportar el PDF rasterizando la plantilla oficial, de
+    // modo que el archivo conserve EXACTAMENTE el mismo diseño.
+    let promesaHtml2Canvas = null;
+    function cargarHtml2Canvas() {
+        if (window.html2canvas) return Promise.resolve(window.html2canvas);
+        if (promesaHtml2Canvas) return promesaHtml2Canvas;
+
+        promesaHtml2Canvas = new Promise((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+            s.onload = () => resolve(window.html2canvas);
+            s.onerror = () => reject(new Error("No se pudo cargar html2canvas"));
+            document.head.appendChild(s);
+        });
+        return promesaHtml2Canvas;
     }
 
-    // Tabla HTML de materiales reutilizada por Word y Excel.
-    function tablaMaterialesHTML() {
-        return (exp) => `
-            <table border="1" cellspacing="0" cellpadding="6">
-                <thead>
-                    <tr>
-                        <th>Ítem</th><th>Descripción de Material</th><th>U.M.</th>
-                        <th>Cantidad</th><th>Observaciones</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${exp.materiales.map((m, i) => `
+    /* ---------- Utilidades de la plantilla ---------- */
+
+    const MESES = [
+        "enero", "febrero", "marzo", "abril", "mayo", "junio",
+        "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+    ];
+
+    // Fecha legible: "21 de octubre del 2025". Acepta ISO (yyyy-mm-dd)
+    // y degrada al texto original si no es interpretable.
+    function fechaLarga(iso) {
+        if (!iso) return "";
+        const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + "T00:00:00" : iso);
+        if (isNaN(d.getTime())) return iso;
+        return `${d.getDate()} de ${MESES[d.getMonth()]} del ${d.getFullYear()}`;
+    }
+
+    // Escapa y conserva los saltos de línea (observaciones largas).
+    function escMultilinea(t) {
+        return esc(t == null ? "" : t).replace(/\r?\n/g, "<br>");
+    }
+
+    // Resuelve EN VIVO los datos de la empresa (nombre, RUC y logo)
+    // desde Configuración General. Si el expediente es antiguo o la
+    // empresa ya no existe, degrada a los datos guardados en el propio
+    // expediente. Nunca inventa información.
+    function contextoEmpresaDoc(exp) {
+        let ctx = null;
+        if (exp.empresaId && typeof ConfiguracionDB !== "undefined") {
+            ctx = ConfiguracionDB.contextoEmpresa(exp.empresaId);
+        }
+        return {
+            empresa: (ctx && ctx.nombre) || exp.empresa || "",
+            ruc:     (ctx && ctx.ruc)    || exp.ruc     || "",
+            logo:    (ctx && ctx.logo)   || null
+        };
+    }
+
+    // Materiales reales (con descripción) del expediente.
+    function materialesReales(exp) {
+        return (exp.materiales || []).filter((m) => (m.descripcion || "").trim() !== "");
+    }
+
+    // Título inteligente del documento: se genera a partir del propio
+    // contenido del requerimiento (materiales / partida). Como se
+    // calcula en cada render, si el usuario agrega más materiales el
+    // título se actualiza solo. Nunca usa texto de ejemplo.
+    function tituloInteligente(exp) {
+        const mats = materialesReales(exp);
+
+        if (mats.length === 0) {
+            const partida = (exp.partida || "").trim();
+            return partida ? `Requerimiento de ${partida}` : "Requerimiento de materiales";
+        }
+
+        const nombres = [];
+        const vistos = new Set();
+        mats.forEach((m) => {
+            let n = m.descripcion.trim().split(/[,\-–(/]/)[0].trim();
+            n = n.split(/\s+/).slice(0, 3).join(" ");
+            const clave = n.toLowerCase();
+            if (n && !vistos.has(clave)) { vistos.add(clave); nombres.push(n); }
+        });
+
+        const top = nombres.slice(0, 3);
+        let detalle = top.join(", ");
+        const resto = nombres.length - top.length;
+        if (resto > 0) detalle += ` y ${resto} más`;
+
+        return `Requerimiento de ${detalle}`;
+    }
+
+    // Nombre de archivo seguro a partir del código + título.
+    function nombreArchivo(exp, extension) {
+        const base = `${exp.codigo || "REQ"} ${tituloInteligente(exp)}`
+            .replace(/[\\/:*?"<>|]+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80);
+        return `${base}.${extension}`;
+    }
+
+    /* ---------- PLANTILLA OFICIAL ÚNICA (A4) ----------
+       Única fuente visual del documento. La consumen por igual la
+       Vista previa, la Impresión y la exportación a PDF. Replica el
+       documento físico de referencia (encabezado, cuadros de datos,
+       tabla celeste, lugar de entrega y firmas) sin sombras, sin
+       degradados y sin bordes redondeados. */
+
+    const MIN_FILAS_TABLA = 8;
+
+    function filaMaterialHTML(m, i) {
+        return `
+            <tr>
+                <td class="zdoc-c-item">${i + 1}</td>
+                <td class="zdoc-c-um">${esc(m.um)}</td>
+                <td class="zdoc-c-cant">${esc(m.cantidad)}</td>
+                <td class="zdoc-c-desc">${escMultilinea(m.descripcion)}</td>
+                <td class="zdoc-c-obs">${escMultilinea(m.observaciones)}</td>
+            </tr>`;
+    }
+
+    function filaVaciaHTML() {
+        return `
+            <tr class="zdoc-fila-vacia">
+                <td class="zdoc-c-item">&nbsp;</td>
+                <td class="zdoc-c-um"></td>
+                <td class="zdoc-c-cant"></td>
+                <td class="zdoc-c-desc"></td>
+                <td class="zdoc-c-obs"></td>
+            </tr>`;
+    }
+
+    function celdaDato(valor) {
+        const v = esc(valor);
+        return v || "&nbsp;";
+    }
+
+    // Devuelve el HTML de la página A4 (.zdoc-page). El estilo vive en
+    // style.css (.zdoc-*) para no duplicar CSS entre visor e impresión.
+    function plantillaHTML(exp) {
+        const c = contextoEmpresaDoc(exp);
+        const mats = materialesReales(exp);
+
+        const filas = mats.map(filaMaterialHTML).join("");
+        const faltan = Math.max(0, MIN_FILAS_TABLA - mats.length);
+        const relleno = Array.from({ length: faltan }, filaVaciaHTML).join("");
+
+        const logoHTML = c.logo
+            ? `<img class="zdoc-logo-img" src="${esc(c.logo)}" alt="Logo de ${esc(c.empresa)}">`
+            : `<span class="zdoc-logo-fallback">${esc((c.empresa || "ZOVRAKE").slice(0, 4).toUpperCase())}</span>`;
+
+        return `
+        <div class="zdoc-page">
+            <div class="zdoc-frame">
+
+                <table class="zdoc-encabezado">
+                    <colgroup><col style="width:34mm"><col></colgroup>
+                    <tbody>
                         <tr>
-                            <td>${i + 1}</td>
-                            <td>${esc(m.descripcion)}</td>
-                            <td>${esc(m.um)}</td>
-                            <td>${esc(m.cantidad)}</td>
-                            <td>${esc(m.observaciones)}</td>
-                        </tr>`).join("")}
-                </tbody>
-            </table>`;
+                            <td class="zdoc-logo-cell">${logoHTML}</td>
+                            <td class="zdoc-titulo-cell">
+                                <div class="zdoc-empresa">${esc(c.empresa)}</div>
+                                <div class="zdoc-ruc">RUC ${esc(c.ruc)}</div>
+                                <div class="zdoc-doctipo">REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS</div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table class="zdoc-meta">
+                    <colgroup>
+                        <col style="width:32mm"><col><col style="width:36mm"><col style="width:40mm">
+                    </colgroup>
+                    <tbody>
+                        <tr>
+                            <td class="zdoc-lbl">OBRA</td>
+                            <td class="zdoc-val">${celdaDato(exp.obra)}</td>
+                            <td class="zdoc-lbl">N° DE REQUERIMIENTO</td>
+                            <td class="zdoc-val zdoc-val-strong">${celdaDato(exp.codigo)}</td>
+                        </tr>
+                        <tr>
+                            <td class="zdoc-lbl">PARTIDA</td>
+                            <td class="zdoc-val">${celdaDato(exp.partida)}</td>
+                            <td class="zdoc-lbl">FECHA</td>
+                            <td class="zdoc-val">${celdaDato(fechaLarga(exp.fecha))}</td>
+                        </tr>
+                        <tr>
+                            <td class="zdoc-lbl">REQUERIDO POR</td>
+                            <td class="zdoc-val">${celdaDato(exp.requeridoPor)}</td>
+                            <td class="zdoc-lbl">CARGO</td>
+                            <td class="zdoc-val">${celdaDato(exp.cargoRequerido)}</td>
+                        </tr>
+                        <tr>
+                            <td class="zdoc-lbl">RECIBIDO POR</td>
+                            <td class="zdoc-val">${celdaDato(exp.recibidoPor)}</td>
+                            <td class="zdoc-lbl">CARGO</td>
+                            <td class="zdoc-val">${celdaDato(exp.cargoRecibido)}</td>
+                        </tr>
+                        <tr>
+                            <td class="zdoc-lbl">FECHA MÁXIMA DE INGRESO A OBRA</td>
+                            <td class="zdoc-val" colspan="3">${celdaDato(fechaLarga(exp.fechaMaxima))}</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table class="zdoc-tabla-mat">
+                    <colgroup>
+                        <col style="width:12mm"><col style="width:18mm"><col style="width:20mm"><col><col style="width:50mm">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>ITEM</th>
+                            <th>U.M.</th>
+                            <th>CANTIDAD</th>
+                            <th>DESCRIPCIÓN DEL MATERIAL</th>
+                            <th>OBSERVACIONES</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${filas}${relleno}
+                    </tbody>
+                </table>
+
+                <table class="zdoc-lugar">
+                    <colgroup><col style="width:38mm"><col></colgroup>
+                    <tbody>
+                        <tr>
+                            <td class="zdoc-lbl">LUGAR DE ENTREGA</td>
+                            <td class="zdoc-val">${celdaDato(exp.lugarEntrega)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table class="zdoc-firmas">
+                    <colgroup><col style="width:33.33%"><col style="width:33.33%"><col style="width:33.34%"></colgroup>
+                    <tbody>
+                        <tr>
+                            <td><div class="zdoc-firma-linea"></div><div class="zdoc-firma-rol">USUARIO</div></td>
+                            <td><div class="zdoc-firma-linea"></div><div class="zdoc-firma-rol">GERENCIA</div></td>
+                            <td><div class="zdoc-firma-linea"></div><div class="zdoc-firma-rol">JEFE DE LOGÍSTICA</div></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+            </div>
+        </div>`;
     }
 
-    function cabeceraHTML(exp) {
-        return fila(exp).map(([k, v]) =>
-            `<tr><td><strong>${esc(k)}</strong></td><td>${esc(v)}</td></tr>`
-        ).join("");
+    /* ---------- IMPRESIÓN (misma plantilla) ---------- */
+
+    function imprimir(exp) {
+        const ventana = window.open("", "_blank");
+        if (!ventana) return;
+
+        ventana.document.write(`<!DOCTYPE html>
+            <html lang="es"><head>
+                <meta charset="utf-8">
+                <base href="${esc(location.href)}">
+                <title>${esc(nombreArchivo(exp, "pdf").replace(/\.pdf$/, ""))}</title>
+                <link rel="stylesheet" href="style.css">
+                <style>
+                    html,body{margin:0;background:#fff;}
+                    body{display:block;}
+                    .zdoc-page{margin:0 auto;box-shadow:none;}
+                    @page{size:A4;margin:0;}
+                </style>
+            </head><body class="zdoc-print">
+                ${plantillaHTML(exp)}
+                <script>
+                    window.addEventListener("load", function(){
+                        setTimeout(function(){ window.focus(); window.print(); }, 350);
+                    });
+                <\/script>
+            </body></html>`);
+        ventana.document.close();
     }
 
-    function descargarWord(exp) {
+    /* ---------- EXPORTAR PDF (rasteriza la plantilla) ----------
+       Conserva el diseño EXACTO. Si las librerías no cargan, recae en
+       la impresión (que produce un PDF igual de fiel vía el navegador). */
+
+    function exportarPDF(exp) {
+        return Promise.all([cargarJsPDF(), cargarHtml2Canvas()])
+            .then(([JsPDF, html2canvas]) => {
+                if (!JsPDF || !html2canvas) { imprimir(exp); return; }
+
+                // Render fuera de pantalla a tamaño A4 real para capturar nítido.
+                const host = document.createElement("div");
+                host.style.cssText = "position:fixed;left:-10000px;top:0;background:#fff;z-index:-1;";
+                host.innerHTML = plantillaHTML(exp);
+                document.body.appendChild(host);
+
+                const page = host.querySelector(".zdoc-page");
+
+                return html2canvas(page, { scale: 2, useCORS: true, backgroundColor: "#ffffff" })
+                    .then((canvas) => {
+                        const doc = new JsPDF({ unit: "pt", format: "a4" });
+                        const pageW = doc.internal.pageSize.getWidth();
+                        const pageH = doc.internal.pageSize.getHeight();
+
+                        const imgW = pageW;
+                        const imgH = canvas.height * imgW / canvas.width;
+                        const imgData = canvas.toDataURL("image/png");
+
+                        let heightLeft = imgH;
+                        let position = 0;
+
+                        doc.addImage(imgData, "PNG", 0, position, imgW, imgH);
+                        heightLeft -= pageH;
+
+                        while (heightLeft > 0) {
+                            position -= pageH;
+                            doc.addPage();
+                            doc.addImage(imgData, "PNG", 0, position, imgW, imgH);
+                            heightLeft -= pageH;
+                        }
+
+                        doc.save(nombreArchivo(exp, "pdf"));
+                    })
+                    .finally(() => host.remove());
+            })
+            .catch(() => imprimir(exp));
+    }
+
+    /* ---------- EXPORTAR WORD (conserva tablas) ----------
+       Mismo origen de datos; estructura con tablas e bordes en línea
+       para que Word respete la cuadrícula del documento. */
+
+    function exportarWord(exp) {
+        const c = contextoEmpresaDoc(exp);
+        const mats = materialesReales(exp);
+
+        const filas = mats.map((m, i) => `
+            <tr>
+                <td style="text-align:center">${i + 1}</td>
+                <td style="text-align:center">${esc(m.um)}</td>
+                <td style="text-align:center">${esc(m.cantidad)}</td>
+                <td>${escMultilinea(m.descripcion)}</td>
+                <td>${escMultilinea(m.observaciones)}</td>
+            </tr>`).join("");
+
         const html = `
             <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
             <head><meta charset="utf-8"><title>${esc(exp.codigo)}</title></head>
-            <body style="font-family:Arial,sans-serif;color:#222">
-                <h1 style="color:#B68A2E">ZOVRAKE — Expediente Digital</h1>
-                <h2>${esc(exp.codigo)}</h2>
-                <table border="0" cellpadding="4">${cabeceraHTML(exp)}</table>
-                <h3>Detalle del Requerimiento</h3>
-                ${tablaMaterialesHTML()(exp)}
-                <h3>Observaciones Generales</h3>
-                <p>${esc(exp.observacionesGenerales) || "—"}</p>
+            <body style="font-family:Arial,sans-serif;color:#111;font-size:11px">
+
+                <table border="1" cellspacing="0" cellpadding="6" width="100%" style="border-collapse:collapse">
+                    <tr>
+                        <td width="120" align="center"><strong>${esc(c.empresa || "—")}</strong></td>
+                        <td align="center">
+                            <div><strong>${esc(c.empresa)}</strong></div>
+                            <div>RUC ${esc(c.ruc)}</div>
+                            <div><strong>REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS</strong></div>
+                        </td>
+                    </tr>
+                </table>
+
+                <table border="1" cellspacing="0" cellpadding="5" width="100%" style="border-collapse:collapse;margin-top:8px">
+                    <tr><td width="22%"><strong>OBRA</strong></td><td>${esc(exp.obra)}</td><td width="22%"><strong>N° DE REQUERIMIENTO</strong></td><td>${esc(exp.codigo)}</td></tr>
+                    <tr><td><strong>PARTIDA</strong></td><td>${esc(exp.partida)}</td><td><strong>FECHA</strong></td><td>${esc(fechaLarga(exp.fecha))}</td></tr>
+                    <tr><td><strong>REQUERIDO POR</strong></td><td>${esc(exp.requeridoPor)}</td><td><strong>CARGO</strong></td><td>${esc(exp.cargoRequerido)}</td></tr>
+                    <tr><td><strong>RECIBIDO POR</strong></td><td>${esc(exp.recibidoPor)}</td><td><strong>CARGO</strong></td><td>${esc(exp.cargoRecibido)}</td></tr>
+                    <tr><td><strong>FECHA MÁXIMA DE INGRESO A OBRA</strong></td><td colspan="3">${esc(fechaLarga(exp.fechaMaxima))}</td></tr>
+                </table>
+
+                <table border="1" cellspacing="0" cellpadding="5" width="100%" style="border-collapse:collapse;margin-top:8px">
+                    <thead>
+                        <tr style="background:#BDD7EE">
+                            <th>ITEM</th><th>U.M.</th><th>CANTIDAD</th><th>DESCRIPCIÓN DEL MATERIAL</th><th>OBSERVACIONES</th>
+                        </tr>
+                    </thead>
+                    <tbody>${filas}</tbody>
+                </table>
+
+                <table border="1" cellspacing="0" cellpadding="5" width="100%" style="border-collapse:collapse;margin-top:8px">
+                    <tr><td width="22%"><strong>LUGAR DE ENTREGA</strong></td><td>${esc(exp.lugarEntrega)}</td></tr>
+                </table>
+
+                <table width="100%" cellpadding="24" style="margin-top:24px;text-align:center">
+                    <tr>
+                        <td>__________________<br>USUARIO</td>
+                        <td>__________________<br>GERENCIA</td>
+                        <td>__________________<br>JEFE DE LOGÍSTICA</td>
+                    </tr>
+                </table>
+
             </body></html>`;
 
-        descargar(new Blob([html], { type: "application/msword" }), `${exp.codigo}.doc`);
+        descargar(new Blob(["\ufeff" + html], { type: "application/msword" }), nombreArchivo(exp, "doc"));
     }
 
-    function descargarExcel(exp) {
+    /* ---------- EXPORTAR EXCEL (columnas organizadas) ---------- */
+
+    function exportarExcel(exp) {
+        const c = contextoEmpresaDoc(exp);
+        const mats = materialesReales(exp);
+
+        const filas = mats.map((m, i) => `
+            <tr>
+                <td>${i + 1}</td><td>${esc(m.um)}</td><td>${esc(m.cantidad)}</td>
+                <td>${esc(m.descripcion)}</td><td>${esc(m.observaciones)}</td>
+            </tr>`).join("");
+
         const html = `
             <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
             <head><meta charset="utf-8"></head>
             <body>
                 <table border="1">
-                    <tr><th colspan="5" style="background:#B68A2E;color:#fff">ZOVRAKE — Expediente ${esc(exp.codigo)}</th></tr>
+                    <tr><th colspan="5" style="background:#BDD7EE">${esc(c.empresa)} — REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS</th></tr>
+                    <tr><td>RUC</td><td colspan="4">${esc(c.ruc)}</td></tr>
+                    <tr><td>N° de Requerimiento</td><td colspan="4">${esc(exp.codigo)}</td></tr>
                     <tr><td>Obra</td><td colspan="4">${esc(exp.obra)}</td></tr>
                     <tr><td>Partida</td><td colspan="4">${esc(exp.partida)}</td></tr>
-                    <tr><td>Requerido por</td><td colspan="4">${esc(exp.requeridoPor)}</td></tr>
-                    <tr><td>Fecha máxima</td><td colspan="4">${esc(exp.fechaMaxima)}</td></tr>
-                    <tr></tr>
-                    <tr>
-                        <th>Ítem</th><th>Descripción de Material</th><th>U.M.</th>
-                        <th>Cantidad</th><th>Observaciones</th>
+                    <tr><td>Requerido por</td><td colspan="4">${esc(exp.requeridoPor)} (${esc(exp.cargoRequerido)})</td></tr>
+                    <tr><td>Recibido por</td><td colspan="4">${esc(exp.recibidoPor)} (${esc(exp.cargoRecibido)})</td></tr>
+                    <tr><td>Fecha</td><td colspan="4">${esc(fechaLarga(exp.fecha))}</td></tr>
+                    <tr><td>Fecha máxima de ingreso a obra</td><td colspan="4">${esc(fechaLarga(exp.fechaMaxima))}</td></tr>
+                    <tr><td>Lugar de entrega</td><td colspan="4">${esc(exp.lugarEntrega)}</td></tr>
+                    <tr><td colspan="5"></td></tr>
+                    <tr style="background:#BDD7EE">
+                        <th>ITEM</th><th>U.M.</th><th>CANTIDAD</th><th>DESCRIPCIÓN DEL MATERIAL</th><th>OBSERVACIONES</th>
                     </tr>
-                    ${exp.materiales.map((m, i) => `
-                        <tr>
-                            <td>${i + 1}</td><td>${esc(m.descripcion)}</td><td>${esc(m.um)}</td>
-                            <td>${esc(m.cantidad)}</td><td>${esc(m.observaciones)}</td>
-                        </tr>`).join("")}
+                    ${filas}
                 </table>
             </body></html>`;
 
-        descargar(new Blob([html], { type: "application/vnd.ms-excel" }), `${exp.codigo}.xls`);
+        descargar(new Blob(["\ufeff" + html], { type: "application/vnd.ms-excel" }), nombreArchivo(exp, "xls"));
     }
 
-    function imprimirComoPDF(exp) {
-        const ventana = window.open("", "_blank");
-        if (!ventana) return;
-        ventana.document.write(`
-            <html><head><meta charset="utf-8"><title>${esc(exp.codigo)}</title></head>
-            <body style="font-family:Arial,sans-serif;padding:24px">
-                <h1 style="color:#B68A2E">ZOVRAKE — Expediente Digital</h1>
-                <h2>${esc(exp.codigo)}</h2>
-                <table cellpadding="4">${cabeceraHTML(exp)}</table>
-                <h3>Detalle del Requerimiento</h3>
-                ${tablaMaterialesHTML()(exp)}
-                <h3>Observaciones Generales</h3>
-                <p>${esc(exp.observacionesGenerales) || "—"}</p>
-                <script>window.onload=function(){window.print();}<\/script>
-            </body></html>`);
-        ventana.document.close();
-    }
-
-    function descargarPDF(exp) {
-        return cargarJsPDF().then((JsPDF) => {
-            if (!JsPDF) { imprimirComoPDF(exp); return; }
-
-            const doc = new JsPDF({ unit: "pt", format: "a4" });
-            const margen = 40;
-            let y = 50;
-
-            doc.setFontSize(18);
-            doc.setTextColor(182, 138, 46);
-            doc.text("ZOVRAKE — Expediente Digital", margen, y);
-
-            y += 24;
-            doc.setFontSize(13);
-            doc.setTextColor(40, 40, 40);
-            doc.text(exp.codigo, margen, y);
-
-            y += 22;
-            doc.setFontSize(10);
-            fila(exp).forEach(([k, v]) => {
-                doc.setTextColor(120, 120, 120);
-                doc.text(`${k}:`, margen, y);
-                doc.setTextColor(40, 40, 40);
-                doc.text(String(v == null ? "" : v), margen + 130, y);
-                y += 16;
-            });
-
-            y += 10;
-            doc.setFontSize(12);
-            doc.setTextColor(182, 138, 46);
-            doc.text("Detalle del Requerimiento", margen, y);
-            y += 16;
-
-            doc.setFontSize(9);
-            doc.setTextColor(40, 40, 40);
-            doc.text("Ítem", margen, y);
-            doc.text("Descripción", margen + 40, y);
-            doc.text("U.M.", margen + 300, y);
-            doc.text("Cant.", margen + 360, y);
-            y += 4;
-            doc.line(margen, y, 555, y);
-            y += 14;
-
-            exp.materiales.forEach((m, i) => {
-                if (y > 780) { doc.addPage(); y = 50; }
-                doc.text(String(i + 1), margen, y);
-                doc.text(String(m.descripcion || "").slice(0, 60), margen + 40, y);
-                doc.text(String(m.um || ""), margen + 300, y);
-                doc.text(String(m.cantidad || ""), margen + 360, y);
-                y += 15;
-            });
-
-            if (exp.observacionesGenerales) {
-                y += 16;
-                doc.setTextColor(182, 138, 46);
-                doc.setFontSize(12);
-                doc.text("Observaciones Generales", margen, y);
-                y += 16;
-                doc.setTextColor(40, 40, 40);
-                doc.setFontSize(10);
-                doc.text(doc.splitTextToSize(exp.observacionesGenerales, 515), margen, y);
-            }
-
-            doc.save(`${exp.codigo}.pdf`);
-        }).catch(() => imprimirComoPDF(exp));
-    }
-
-    return { descargarPDF, descargarWord, descargarExcel };
+    // Compatibilidad: los nombres previos siguen disponibles para el
+    // resto del ERP (p. ej. la pantalla de éxito de Nuevo Requerimiento),
+    // ahora apuntando a la plantilla oficial única.
+    return {
+        plantillaHTML, tituloInteligente, nombreArchivo,
+        imprimir, exportarPDF, exportarWord, exportarExcel,
+        descargarPDF: exportarPDF, descargarWord: exportarWord, descargarExcel: exportarExcel
+    };
 })();
 
 /* --------------------------------------------------------
@@ -2612,6 +2908,511 @@ const NuevoRequerimiento = (function () {
    reutilizar la misma navegación que el usuario (sin recargas).
    -------------------------------------------------------- */
 
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "DOCUMENTOS"
+   ----------------------------------------------------------
+   Bandeja limpia de documentos generados por el ERP. NO crea
+   una segunda base de datos ni otro sistema de documentos:
+
+     · Origen de datos   -> RequerimientosDB.listarExpedientes()
+                            (filtrado por estado / entrega).
+     · Plantilla / export -> DocumentGenerator (plantilla única
+                            oficial: vista previa = impresión =
+                            PDF; Word/Excel desde la misma fuente).
+
+   Responsabilidades separadas:
+     DocumentosData  -> consulta (bandeja / archivo).
+     Documentos      -> interfaz: bandeja, menú ⋮, visor a
+                        pantalla completa y envío a Logística.
+   El mismo módulo sirve la pestaña "Documentos" (pendientes de
+   envío) y "Archivo" (ya enviados a Logística) mediante un modo.
+   ========================================================== */
+
+const DocumentosData = (function () {
+
+    // Un expediente es un "documento" cuando fue generado (no es un
+    // borrador). Los borradores aún no producen documento oficial.
+    function esGenerado(e) {
+        return !!e.estado && e.estado !== "borrador";
+    }
+
+    // Bandeja "Documentos": generados y todavía no enviados a Logística.
+    function bandejaDocumentos() {
+        return RequerimientosDB.listarExpedientes()
+            .filter((e) => esGenerado(e) && !e.enviadoLogistica);
+    }
+
+    // Bandeja "Archivo": ya entregados a Logística.
+    function bandejaArchivo() {
+        return RequerimientosDB.listarExpedientes()
+            .filter((e) => !!e.enviadoLogistica);
+    }
+
+    function porModo(modo) {
+        return modo === "archivo" ? bandejaArchivo() : bandejaDocumentos();
+    }
+
+    return { porModo, bandejaDocumentos, bandejaArchivo };
+})();
+
+const Documentos = (function () {
+
+    // Estado de interfaz (no es información de negocio): qué modo se
+    // está mostrando y qué documento opera el menú / el visor.
+    const estado = { modo: "documentos", codigoMenu: null };
+    const visor = { codigo: null, exp: null, escala: 1, anchoNat: 0, altoNat: 0 };
+
+    let handlersGlobales = false;
+
+    /* ---------- Utilidades de presentación ---------- */
+
+    function esc(t) {
+        return PanelUtils.escapar(t == null ? "" : t);
+    }
+
+    function empresaDe(exp) {
+        if (exp.empresaId && typeof ConfiguracionDB !== "undefined") {
+            const c = ConfiguracionDB.contextoEmpresa(exp.empresaId);
+            if (c && c.nombre) return c.nombre;
+        }
+        return exp.empresa || "—";
+    }
+
+    function fechaCorta(iso) {
+        if (!iso) return "—";
+        const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + "T00:00:00" : iso);
+        if (isNaN(d.getTime())) return iso;
+        return PanelUtils.fecha(d);
+    }
+
+    function materialesReales(exp) {
+        return (exp.materiales || []).filter((m) => (m.descripcion || "").trim() !== "");
+    }
+
+    function expediente(codigo) {
+        return RequerimientosDB.expedientePorCodigo(codigo);
+    }
+
+    /* ---------- BANDEJA (render) ---------- */
+
+    function filaHTML(exp, modo) {
+        const codigo = exp.codigo;
+        const titulo = DocumentGenerator.tituloInteligente(exp);
+        const estadoTxt = modo === "archivo" ? "Enviado a Logística" : "Por enviar";
+
+        return `
+            <tr class="zdoc-bj-row" data-codigo="${esc(codigo)}" tabindex="0">
+                <td class="zdoc-bj-cod" data-label="N° Requerimiento">${esc(codigo)}</td>
+                <td class="zdoc-bj-tit" data-label="Título">${esc(titulo)}</td>
+                <td data-label="Empresa">${esc(empresaDe(exp))}</td>
+                <td data-label="Obra">${esc(exp.obra)}</td>
+                <td class="zdoc-bj-fecha" data-label="Fecha">${esc(fechaCorta(exp.fecha))}</td>
+                <td data-label="Estado"><span class="zdoc-badge zdoc-badge-${modo}">${esc(estadoTxt)}</span></td>
+                <td class="zdoc-bj-acc">
+                    <button class="zdoc-kebab" type="button" data-zdoc-kebab="${esc(codigo)}" aria-label="Opciones del documento">⋮</button>
+                </td>
+            </tr>`;
+    }
+
+    function vacioHTML(modo) {
+        const texto = modo === "archivo"
+            ? "Aún no hay documentos enviados a Logística. Cuando envíes un documento desde la bandeja, aparecerá aquí."
+            : "No hay documentos generados. Crea un requerimiento para generar su documento oficial.";
+        return `
+            <div class="zdoc-vacio">
+                <div class="zdoc-vacio-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9.5 12.5h5M9.5 16h5"/></svg>
+                </div>
+                <p class="zdoc-vacio-text">${texto}</p>
+            </div>`;
+    }
+
+    function render(modo) {
+        estado.modo = modo === "archivo" ? "archivo" : "documentos";
+        const lista = DocumentosData.porModo(estado.modo);
+
+        const titulo = estado.modo === "archivo" ? "Archivo" : "Documentos";
+        const subtitulo = estado.modo === "archivo"
+            ? "Documentos enviados a Logística."
+            : "Bandeja de documentos generados por el ERP.";
+
+        const cuerpo = lista.length
+            ? `
+            <div class="zdoc-bj-wrap zv-no-scrollbar">
+                <table class="zdoc-bj">
+                    <thead>
+                        <tr>
+                            <th>N° Requerimiento</th>
+                            <th>Título</th>
+                            <th>Empresa</th>
+                            <th>Obra</th>
+                            <th>Fecha</th>
+                            <th>Estado</th>
+                            <th class="zdoc-bj-acc"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${lista.map((e) => filaHTML(e, estado.modo)).join("")}</tbody>
+                </table>
+            </div>`
+            : vacioHTML(estado.modo);
+
+        return `
+            <section class="zdoc-bandeja">
+                <header class="zdoc-bandeja-head">
+                    <h2 class="zdoc-bandeja-title">${titulo}</h2>
+                    <p class="zdoc-bandeja-sub">${subtitulo}</p>
+                </header>
+                ${cuerpo}
+            </section>`;
+    }
+
+    /* ---------- MENÚ DE TRES PUNTOS (⋮) ---------- */
+
+    function menuNode() {
+        let m = document.getElementById("zdoc-menu");
+        if (m) return m;
+
+        m = document.createElement("div");
+        m.id = "zdoc-menu";
+        m.className = "zdoc-menu";
+        m.hidden = true;
+        m.innerHTML = `
+            <button type="button" class="zdoc-menu-item" data-act="preview">Vista previa</button>
+            <div class="zdoc-menu-group">
+                <button type="button" class="zdoc-menu-item zdoc-menu-haschild" data-act="export-toggle">
+                    <span>Exportar</span><span class="zdoc-menu-caret">▸</span>
+                </button>
+                <div class="zdoc-submenu" hidden>
+                    <button type="button" class="zdoc-menu-item" data-act="export" data-fmt="pdf">PDF</button>
+                    <button type="button" class="zdoc-menu-item" data-act="export" data-fmt="excel">Excel</button>
+                    <button type="button" class="zdoc-menu-item" data-act="export" data-fmt="word">Word</button>
+                </div>
+            </div>
+            <button type="button" class="zdoc-menu-item" data-act="print">Imprimir</button>
+            <button type="button" class="zdoc-menu-item zdoc-menu-send" data-act="logistica">Enviar a Logística</button>`;
+
+        document.body.appendChild(m);
+        m.addEventListener("click", onMenuClick);
+        return m;
+    }
+
+    function cerrarMenu() {
+        const m = document.getElementById("zdoc-menu");
+        if (m && !m.hidden) {
+            m.hidden = true;
+            const sub = m.querySelector(".zdoc-submenu");
+            if (sub) sub.hidden = true;
+        }
+        estado.codigoMenu = null;
+    }
+
+    function abrirMenu(btn, codigo) {
+        const m = menuNode();
+        estado.codigoMenu = codigo;
+
+        // "Enviar a Logística" solo aplica a la bandeja Documentos.
+        m.querySelector('[data-act="logistica"]').hidden = (estado.modo !== "documentos");
+        m.querySelector(".zdoc-submenu").hidden = true;
+
+        m.hidden = false;
+
+        const r = btn.getBoundingClientRect();
+        const mw = m.offsetWidth;
+        const mh = m.offsetHeight;
+
+        let left = r.right - mw;
+        if (left < 8) left = 8;
+
+        let top = r.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = r.top - mh - 6;
+        if (top < 8) top = 8;
+
+        m.style.left = left + "px";
+        m.style.top = top + "px";
+    }
+
+    function onMenuClick(evento) {
+        const item = evento.target.closest(".zdoc-menu-item");
+        if (!item) return;
+
+        const act = item.dataset.act;
+
+        if (act === "export-toggle") {
+            const sub = item.parentElement.querySelector(".zdoc-submenu");
+            if (sub) sub.hidden = !sub.hidden;
+            return;
+        }
+
+        const codigo = estado.codigoMenu;
+        cerrarMenu();
+        if (!codigo) return;
+
+        if (act === "preview") abrirVisor(codigo);
+        else if (act === "print") imprimir(codigo);
+        else if (act === "export") exportar(codigo, item.dataset.fmt);
+        else if (act === "logistica") enviarLogistica(codigo);
+    }
+
+    /* ---------- VISOR DOCUMENTAL A PANTALLA COMPLETA ---------- */
+
+    function visorNode() {
+        let v = document.getElementById("zviewer");
+        if (v) return v;
+
+        v = document.createElement("div");
+        v.id = "zviewer";
+        v.className = "zviewer";
+        v.hidden = true;
+        v.innerHTML = `
+            <div class="zviewer-bar">
+                <div class="zviewer-info">
+                    <span class="zviewer-title" id="zviewer-title"></span>
+                    <span class="zviewer-sub" id="zviewer-sub"></span>
+                </div>
+                <div class="zviewer-tools">
+                    <button type="button" class="zviewer-btn" data-zv="zoom-out" aria-label="Alejar">−</button>
+                    <button type="button" class="zviewer-btn zviewer-zoom" data-zv="fit" aria-label="Ajustar">100%</button>
+                    <button type="button" class="zviewer-btn" data-zv="zoom-in" aria-label="Acercar">+</button>
+                    <span class="zviewer-sep"></span>
+                    <button type="button" class="zviewer-btn" data-zv="print">Imprimir</button>
+                    <button type="button" class="zviewer-btn" data-zv="pdf">PDF</button>
+                    <span class="zviewer-sep"></span>
+                    <button type="button" class="zviewer-btn zviewer-close" data-zv="close" aria-label="Cerrar">✕</button>
+                </div>
+            </div>
+            <div class="zviewer-stage zv-no-scrollbar" id="zviewer-stage">
+                <div class="zviewer-canvas" id="zviewer-canvas"></div>
+            </div>`;
+
+        document.body.appendChild(v);
+        v.addEventListener("click", onVisorClick);
+
+        // Zoom con rueda + Ctrl (escritorio).
+        const stage = v.querySelector("#zviewer-stage");
+        stage.addEventListener("wheel", (e) => {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            aplicarZoom(visor.escala * (e.deltaY < 0 ? 1.1 : 0.9));
+        }, { passive: false });
+
+        return v;
+    }
+
+    function paginaVisor() {
+        return document.querySelector("#zviewer-canvas .zdoc-page");
+    }
+
+    function medirPagina() {
+        const page = paginaVisor();
+        if (!page) return;
+        page.style.transform = "none";
+        visor.anchoNat = page.offsetWidth;
+        visor.altoNat = page.offsetHeight;
+    }
+
+    function aplicarZoom(escala) {
+        const page = paginaVisor();
+        const canvas = document.getElementById("zviewer-canvas");
+        if (!page || !canvas) return;
+
+        visor.escala = Math.min(3, Math.max(0.25, escala));
+
+        page.style.transformOrigin = "top left";
+        page.style.transform = `scale(${visor.escala})`;
+
+        canvas.style.width = (visor.anchoNat * visor.escala) + "px";
+        canvas.style.height = (visor.altoNat * visor.escala) + "px";
+
+        const lbl = document.querySelector('[data-zv="fit"]');
+        if (lbl) lbl.textContent = Math.round(visor.escala * 100) + "%";
+    }
+
+    // Ajusta el documento al ancho disponible (sin superar el 100 %).
+    function ajustarVisor() {
+        const stage = document.getElementById("zviewer-stage");
+        if (!stage || !visor.anchoNat) return;
+        const disponible = stage.clientWidth - 48;
+        const escala = Math.min(1, disponible / visor.anchoNat);
+        aplicarZoom(escala > 0 ? escala : 1);
+        stage.scrollTop = 0;
+    }
+
+    function abrirVisor(codigo) {
+        const exp = expediente(codigo);
+        if (!exp) { toast("No se encontró el documento.", "error"); return; }
+
+        const v = visorNode();
+        visor.codigo = codigo;
+        visor.exp = exp;
+
+        v.querySelector("#zviewer-title").textContent = DocumentGenerator.tituloInteligente(exp);
+        v.querySelector("#zviewer-sub").textContent = `${exp.codigo} · ${exp.obra || ""}`.trim();
+        v.querySelector("#zviewer-canvas").innerHTML = DocumentGenerator.plantillaHTML(exp);
+
+        v.hidden = false;
+        document.body.classList.add("zviewer-open");
+
+        // Espera al layout para medir el tamaño real de la página A4.
+        requestAnimationFrame(() => { medirPagina(); ajustarVisor(); });
+    }
+
+    function cerrarVisor() {
+        const v = document.getElementById("zviewer");
+        if (v) v.hidden = true;
+        document.body.classList.remove("zviewer-open");
+        visor.codigo = null;
+        visor.exp = null;
+    }
+
+    function onVisorClick(evento) {
+        const btn = evento.target.closest("[data-zv]");
+        if (!btn) return;
+
+        const accion = btn.dataset.zv;
+
+        if (accion === "close") cerrarVisor();
+        else if (accion === "zoom-in") aplicarZoom(visor.escala * 1.2);
+        else if (accion === "zoom-out") aplicarZoom(visor.escala / 1.2);
+        else if (accion === "fit") ajustarVisor();
+        else if (accion === "print" && visor.exp) DocumentGenerator.imprimir(visor.exp);
+        else if (accion === "pdf" && visor.exp) DocumentGenerator.exportarPDF(visor.exp);
+    }
+
+    /* ---------- ACCIONES ---------- */
+
+    function imprimir(codigo) {
+        const exp = expediente(codigo);
+        if (exp) DocumentGenerator.imprimir(exp);
+    }
+
+    function exportar(codigo, formato) {
+        const exp = expediente(codigo);
+        if (!exp) return;
+        if (formato === "pdf") DocumentGenerator.exportarPDF(exp);
+        else if (formato === "excel") DocumentGenerator.exportarExcel(exp);
+        else if (formato === "word") DocumentGenerator.exportarWord(exp);
+    }
+
+    // Validación previa al envío: el documento debe estar completo.
+    function validar(exp) {
+        const faltan = [];
+        if (!exp.obra) faltan.push("obra");
+        if (!exp.requeridoPor) faltan.push("requerido por");
+        if (!exp.recibidoPor) faltan.push("recibido por");
+        if (!exp.lugarEntrega) faltan.push("lugar de entrega");
+        if (!exp.fecha) faltan.push("fecha");
+        if (materialesReales(exp).length === 0) faltan.push("materiales");
+        return faltan;
+    }
+
+    function enviarLogistica(codigo) {
+        const exp = expediente(codigo);
+        if (!exp) { toast("No se encontró el documento.", "error"); return; }
+
+        const faltan = validar(exp);
+        if (faltan.length) {
+            toast(`No se puede enviar: faltan datos (${faltan.join(", ")}).`, "error");
+            return;
+        }
+
+        if (!confirm(`¿Enviar el documento ${codigo} a Logística?\n\nSe moverá automáticamente al Archivo y dejará la bandeja Documentos.`)) {
+            return;
+        }
+
+        RequerimientosDB.marcarEnviadoLogistica(codigo);
+        toast(`Documento ${codigo} enviado a Logística y archivado.`, "ok");
+        refrescar();
+    }
+
+    /* ---------- TOAST (aviso transitorio) ---------- */
+
+    function toast(mensaje, tipo) {
+        let t = document.getElementById("zdoc-toast");
+        if (!t) {
+            t = document.createElement("div");
+            t.id = "zdoc-toast";
+            t.className = "zdoc-toast";
+            document.body.appendChild(t);
+        }
+        t.className = `zdoc-toast is-${tipo === "error" ? "error" : "ok"} is-visible`;
+        t.textContent = mensaje;
+
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => { t.classList.remove("is-visible"); }, 3200);
+    }
+
+    /* ---------- MONTAJE / WIRING ---------- */
+
+    // Vuelve a pintar la bandeja del modo actual (tras un envío).
+    function refrescar() {
+        const ws = document.getElementById("req-workspace");
+        if (!ws) return;
+        ws.innerHTML = render(estado.modo);
+        montar(ws, estado.modo);
+    }
+
+    function asegurarHandlersGlobales() {
+        if (handlersGlobales) return;
+        handlersGlobales = true;
+
+        // Cerrar el menú al hacer clic fuera de él (y fuera del kebab).
+        document.addEventListener("mousedown", (e) => {
+            const m = document.getElementById("zdoc-menu");
+            if (!m || m.hidden) return;
+            if (e.target.closest("#zdoc-menu") || e.target.closest("[data-zdoc-kebab]")) return;
+            cerrarMenu();
+        });
+
+        window.addEventListener("resize", () => {
+            cerrarMenu();
+            const v = document.getElementById("zviewer");
+            if (v && !v.hidden) { medirPagina(); ajustarVisor(); }
+        });
+
+        document.addEventListener("scroll", cerrarMenu, true);
+
+        document.addEventListener("keydown", (e) => {
+            if (e.key !== "Escape") return;
+            const v = document.getElementById("zviewer");
+            if (v && !v.hidden) cerrarVisor();
+            else cerrarMenu();
+        });
+    }
+
+    function montar(ws, modo) {
+        estado.modo = modo === "archivo" ? "archivo" : "documentos";
+        asegurarHandlersGlobales();
+
+        // La delegación se enlaza UNA sola vez al contenedor persistente
+        // (#req-workspace); el manejador lee siempre el modo actual. Así
+        // se evita acumular listeners en cada render / refresco.
+        if (ws.dataset.zdocReady) return;
+        ws.dataset.zdocReady = "true";
+
+        ws.addEventListener("click", (evento) => {
+            const kebab = evento.target.closest("[data-zdoc-kebab]");
+            if (kebab) {
+                evento.stopPropagation();
+                abrirMenu(kebab, kebab.dataset.zdocKebab);
+                return;
+            }
+
+            // Clic en la fila (no en el kebab) abre la vista previa.
+            const fila = evento.target.closest(".zdoc-bj-row");
+            if (fila) abrirVisor(fila.dataset.codigo);
+        });
+
+        // Accesibilidad: Enter sobre una fila abre la vista previa.
+        ws.addEventListener("keydown", (evento) => {
+            if (evento.key !== "Enter") return;
+            const fila = evento.target.closest(".zdoc-bj-row");
+            if (fila) { evento.preventDefault(); abrirVisor(fila.dataset.codigo); }
+        });
+    }
+
+    return { render, montar, refrescar, abrirVisor };
+})();
+
 const ReqWorkspace = (function () {
 
     function contenedor() {
@@ -2659,6 +3460,12 @@ const ReqWorkspace = (function () {
         } else if (claveTab === "nuevo-requerimiento") {
             ws.innerHTML = NuevoRequerimiento.render();
             NuevoRequerimiento.montar(ws);
+        } else if (claveTab === "documentos") {
+            ws.innerHTML = Documentos.render("documentos");
+            Documentos.montar(ws, "documentos");
+        } else if (claveTab === "archivo") {
+            ws.innerHTML = Documentos.render("archivo");
+            Documentos.montar(ws, "archivo");
         } else {
             ws.innerHTML = placeholder(claveTab, params);
         }
