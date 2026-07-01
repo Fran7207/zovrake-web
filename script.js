@@ -1623,11 +1623,64 @@ const RequerimientosDB = (function () {
         return exp;
     }
 
+    // ¿Dos registros pertenecen a la misma obra? Se compara por el id
+    // interno de la obra (fuente de verdad de Configuración General) y,
+    // como respaldo para expedientes antiguos, por nombre + empresa.
+    function mismaObra(a, b) {
+        if (a.obraId && b.obraId) return a.obraId === b.obraId;
+        return (a.obra || "") === (b.obra || "") && (a.empresaId || "") === (b.empresaId || "");
+    }
+
+    // Documento ABIERTO de una obra: expediente ya generado (no
+    // borrador) que aún no fue enviado a Logística. Solo puede existir
+    // uno por obra; mientras siga abierto, los nuevos requerimientos de
+    // esa obra se acumulan en él.
+    function documentoAbierto(datos) {
+        return listarExpedientes().find((e) =>
+            !e.enviadoLogistica &&
+            e.estado && e.estado !== "borrador" &&
+            mismaObra(e, datos)
+        ) || null;
+    }
+
+    // Agrega ÚNICAMENTE los nuevos materiales y observaciones al
+    // documento abierto. No cambia el número, la fecha ni el resto del
+    // encabezado: el documento crece mientras permanezca abierto.
+    function agregarADocumento(exp, datos) {
+        const nuevos = (datos.materiales || []).filter((m) => (m.descripcion || "").trim() !== "");
+        exp.materiales = (exp.materiales || []).concat(nuevos);
+
+        const obs = (datos.observacionesGenerales || "").trim();
+        if (obs) {
+            exp.observacionesGenerales = exp.observacionesGenerales
+                ? `${exp.observacionesGenerales}\n${obs}`
+                : obs;
+        }
+
+        exp.actualizadoEn = Date.now();
+
+        upsert(exp);
+        aprenderDeExpediente(datos);
+
+        registrarActividad({ tipo: "documento", texto: "Materiales agregados al documento", codigo: exp.codigo });
+
+        return exp;
+    }
+
     // Genera el EXPEDIENTE DIGITAL (confirmado). Estado "enviado":
     // emitido al flujo interno del módulo (aún NO entregado a
     // Logística, que es un traspaso posterior entre módulos). Alimenta
     // el aprendizaje y actualiza actividad / notificaciones / documentos.
+    //
+    // Regla de negocio: una obra solo puede tener UN documento abierto.
+    // Si ya existe, los nuevos materiales se acumulan en él en lugar de
+    // crear un documento (y un número) nuevo.
     function generarExpediente(datos) {
+        if (!datos.id) {
+            const abierto = documentoAbierto(datos);
+            if (abierto) return agregarADocumento(abierto, datos);
+        }
+
         const codigo = (datos.codigo && datos.codigo.indexOf("REQ-") === 0)
             ? datos.codigo
             : siguienteCodigo("REQ", 12);
@@ -1709,7 +1762,7 @@ const RequerimientosDB = (function () {
     // añade trazabilidad de la entrega. A partir de aquí el submódulo
     // Documentos deja de mostrarlo y el submódulo Archivo lo lista,
     // quedando disponible para el módulo Logística.
-    function marcarEnviadoLogistica(codigo) {
+    function marcarEnviadoLogistica(codigo, tituloDefinitivo) {
         const lista = listarExpedientes();
         const idx = lista.findIndex((e) => e.codigo === codigo);
         if (idx < 0) return null;
@@ -1721,6 +1774,13 @@ const RequerimientosDB = (function () {
             entregadoLogisticaEn: Date.now(),
             actualizadoEn: Date.now()
         };
+
+        // El título queda DEFINITIVO al cerrarse el documento: ya no se
+        // recalcula aunque cambien los datos o el algoritmo de títulos.
+        if (tituloDefinitivo && !lista[idx].tituloDefinitivo) {
+            lista[idx].tituloDefinitivo = tituloDefinitivo;
+        }
+
         guardarColeccion(lista);
 
         registrarActividad({ tipo: "logistica", texto: "Expediente enviado a Logística", codigo });
@@ -1898,6 +1958,9 @@ const DocumentGenerator = (function () {
     // calcula en cada render, si el usuario agrega más materiales el
     // título se actualiza solo. Nunca usa texto de ejemplo.
     function tituloInteligente(exp) {
+        // Documento ya cerrado (enviado a Logística): título congelado.
+        if (exp && exp.tituloDefinitivo) return exp.tituloDefinitivo;
+
         const mats = materialesReales(exp);
 
         if (mats.length === 0) {
@@ -1994,7 +2057,7 @@ const DocumentGenerator = (function () {
                             <td class="zdoc-titulo-cell">
                                 <div class="zdoc-empresa">${esc(c.empresa)}</div>
                                 <div class="zdoc-ruc">RUC ${esc(c.ruc)}</div>
-                                <div class="zdoc-doctipo">REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS</div>
+                                <div class="zdoc-doctipo">${esc(tituloInteligente(exp).toUpperCase())}</div>
                             </td>
                         </tr>
                     </tbody>
@@ -2006,31 +2069,31 @@ const DocumentGenerator = (function () {
                     </colgroup>
                     <tbody>
                         <tr>
-                            <td class="zdoc-lbl">OBRA</td>
+                            <td class="zdoc-lbl">OBRA:</td>
                             <td class="zdoc-val">${celdaDato(exp.obra)}</td>
-                            <td class="zdoc-lbl">N° DE REQUERIMIENTO</td>
+                            <td class="zdoc-lbl">N.º DE REQUERIMIENTO:</td>
                             <td class="zdoc-val zdoc-val-strong">${celdaDato(exp.codigo)}</td>
                         </tr>
                         <tr>
-                            <td class="zdoc-lbl">PARTIDA</td>
+                            <td class="zdoc-lbl">PARTIDA:</td>
                             <td class="zdoc-val">${celdaDato(exp.partida)}</td>
-                            <td class="zdoc-lbl">FECHA</td>
+                            <td class="zdoc-lbl">FECHA:</td>
                             <td class="zdoc-val">${celdaDato(fechaLarga(exp.fecha))}</td>
                         </tr>
                         <tr>
-                            <td class="zdoc-lbl">REQUERIDO POR</td>
+                            <td class="zdoc-lbl">REQUERIDO POR:</td>
                             <td class="zdoc-val">${celdaDato(exp.requeridoPor)}</td>
-                            <td class="zdoc-lbl">CARGO</td>
+                            <td class="zdoc-lbl">CARGO:</td>
                             <td class="zdoc-val">${celdaDato(exp.cargoRequerido)}</td>
                         </tr>
                         <tr>
-                            <td class="zdoc-lbl">RECIBIDO POR</td>
+                            <td class="zdoc-lbl">RECIBIDO POR:</td>
                             <td class="zdoc-val">${celdaDato(exp.recibidoPor)}</td>
-                            <td class="zdoc-lbl">CARGO</td>
+                            <td class="zdoc-lbl">CARGO:</td>
                             <td class="zdoc-val">${celdaDato(exp.cargoRecibido)}</td>
                         </tr>
                         <tr>
-                            <td class="zdoc-lbl">FECHA MÁXIMA DE INGRESO A OBRA</td>
+                            <td class="zdoc-lbl">FECHA MÁXIMA DE INGRESO A OBRA:</td>
                             <td class="zdoc-val" colspan="3">${celdaDato(fechaLarga(exp.fechaMaxima))}</td>
                         </tr>
                     </tbody>
@@ -2058,7 +2121,7 @@ const DocumentGenerator = (function () {
                     <colgroup><col style="width:38mm"><col></colgroup>
                     <tbody>
                         <tr>
-                            <td class="zdoc-lbl">LUGAR DE ENTREGA</td>
+                            <td class="zdoc-lbl">LUGAR DE ENTREGA:</td>
                             <td class="zdoc-val">${celdaDato(exp.lugarEntrega)}</td>
                         </tr>
                     </tbody>
@@ -3319,7 +3382,10 @@ const Documentos = (function () {
             return;
         }
 
-        RequerimientosDB.marcarEnviadoLogistica(codigo);
+        // El título se congela con el valor calculado mientras el
+        // documento estaba abierto (contenido consolidado).
+        const tituloFinal = DocumentGenerator.tituloInteligente(exp);
+        RequerimientosDB.marcarEnviadoLogistica(codigo, tituloFinal);
         toast(`Documento ${codigo} enviado a Logística y archivado.`, "ok");
         refrescar();
     }
