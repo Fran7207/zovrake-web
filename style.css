@@ -4631,6 +4631,16 @@ body.zviewer-open{
    degradados, sin bordes redondeados, sin efectos modernos.
    ========================================================== */
 
+/* Contenedor del documento en el visor: apila una o varias páginas A4
+   (paginación profesional) sin reorganizar ni deformar el formato. */
+.zdoc-doc{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    width: 210mm;
+}
+
 .zdoc-page{
     width: 210mm;
     min-height: 297mm;
@@ -4641,6 +4651,7 @@ body.zviewer-open{
     font-family: Arial, Helvetica, sans-serif;
     font-size: 8pt;
     line-height: 1.25;
+    flex: 0 0 auto;
 }
 
 .zdoc-frame{
@@ -4765,12 +4776,15 @@ body.zviewer-open{
 .zdoc-c-um,
 .zdoc-c-cant{
     text-align: center;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .zdoc-c-desc,
 .zdoc-c-obs{
     white-space: pre-wrap;
     word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .zdoc-fila-vacia td{

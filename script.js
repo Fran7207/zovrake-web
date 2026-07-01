@@ -1953,36 +1953,87 @@ const DocumentGenerator = (function () {
         return (exp.materiales || []).filter((m) => (m.descripcion || "").trim() !== "");
     }
 
-    // Título inteligente del documento: se genera a partir del propio
-    // contenido del requerimiento (materiales / partida). Como se
-    // calcula en cada render, si el usuario agrega más materiales el
-    // título se actualiza solo. Nunca usa texto de ejemplo.
+    /* ---------- GENERADOR DE TÍTULOS PROFESIONALES ----------
+       Analiza TODA la lista de materiales (no solo los primeros), la
+       partida y la obra para deducir el objetivo técnico del documento
+       y construir un único título profesional, al estilo de un
+       documento oficial de una empresa constructora. Nunca lista
+       materiales ni usa expresiones como "y N más". */
+
+    // Familias técnicas de construcción. `etiqueta` es la forma extensa
+    // (familia única dominante) y `combo` la forma breve (dos familias).
+    const FAMILIAS_MATERIAL = [
+        { clave: "acero",       etiqueta: "acero y estructuras metálicas", combo: "estructuras metálicas", palabras: ["acero", "fierro", "varilla", "corrugad", "viga", "ángulo", "angulo", "platina", "perfil", "electrosoldad", "malla", "alambre"] },
+        { clave: "concreto",    etiqueta: "concreto y agregados",          combo: "concreto",              palabras: ["cemento", "concreto", "hormigon", "hormigón", "arena", "piedra", "gravilla", "agregado", "confitillo", "mortero", "aditivo"] },
+        { clave: "albanileria", etiqueta: "albañilería",                   combo: "albañilería",           palabras: ["ladrillo", "bloque", "block", "yeso", "cal ", "pandereta", "king kong", "kingkong"] },
+        { clave: "acabados",    etiqueta: "acabados",                      combo: "acabados",              palabras: ["ceramic", "cerámic", "porcelanato", "mayolic", "mayólic", "baldosa", "enchape", "zocalo", "zócalo", "fragua", "pegamento", "porcelana", "empaste"] },
+        { clave: "pintura",     etiqueta: "pintura y recubrimientos",      combo: "pintura",               palabras: ["pintura", "esmalte", "latex", "látex", "imprimante", "barniz", "thinner", "laca", "sellador", "brocha", "rodillo", "lija", "masilla"] },
+        { clave: "electricas",  etiqueta: "instalaciones eléctricas",      combo: "instalaciones eléctricas", palabras: ["cable", "interruptor", "tomacorriente", "luminaria", "fluorescente", "foco", "tablero", "breaker", "termica", "térmica", "canaleta", "conductor", " led", "socket", "enchufe"] },
+        { clave: "sanitarias",  etiqueta: "instalaciones sanitarias",      combo: "instalaciones sanitarias", palabras: ["tuberia", "tubería", "tubo pvc", "codo", "tee", "union", "unión", "valvula", "válvula", "inodoro", "lavatorio", "gasfiter", "caño", "niple", "reduccion", "reducción", "trampa", "sanitari"] },
+        { clave: "carpinteria", etiqueta: "carpintería y madera",          combo: "carpintería",           palabras: ["madera", "triplay", "melamin", "liston", "listón", "puerta", "marco", "bisagra", "contrachapad", "mdf"] },
+        { clave: "coberturas",  etiqueta: "coberturas y techos",           combo: "coberturas",            palabras: ["calamina", "teja", "cobertura", "drywall", "policarbonato", "fibraforte", "eternit"] },
+        { clave: "ferreteria",  etiqueta: "ferretería",                    combo: "ferretería",            palabras: ["perno", "tuerca", "arandela", "abrazadera", "disco", "broca", "cinta", "silicona", "tornillo", "clavo", "escalera", "carretilla"] }
+    ];
+
+    function familiaDeMaterial(desc) {
+        const t = (desc || "").toLowerCase();
+        for (const f of FAMILIAS_MATERIAL) {
+            if (f.palabras.some((p) => t.includes(p))) return f;
+        }
+        return null;
+    }
+
+    // Título profesional del documento. Se calcula en cada render, de
+    // modo que mientras el documento permanece abierto se actualiza al
+    // agregar materiales. Al enviar a Logística se congela en
+    // `tituloDefinitivo` y ya no vuelve a cambiar.
     function tituloInteligente(exp) {
         // Documento ya cerrado (enviado a Logística): título congelado.
         if (exp && exp.tituloDefinitivo) return exp.tituloDefinitivo;
 
         const mats = materialesReales(exp);
+        const partida = (exp && exp.partida ? String(exp.partida) : "").trim();
 
+        // Sin materiales todavía: se apoya en la partida.
         if (mats.length === 0) {
-            const partida = (exp.partida || "").trim();
-            return partida ? `Requerimiento de ${partida}` : "Requerimiento de materiales";
+            return partida
+                ? `Requerimiento de materiales para ${partida.toLowerCase()}`
+                : "Requerimiento de materiales, insumos y servicios";
         }
 
-        const nombres = [];
-        const vistos = new Set();
+        // Se analiza la lista COMPLETA y se agrupa por familia técnica.
+        const conteo = new Map();
         mats.forEach((m) => {
-            let n = m.descripcion.trim().split(/[,\-–(/]/)[0].trim();
-            n = n.split(/\s+/).slice(0, 3).join(" ");
-            const clave = n.toLowerCase();
-            if (n && !vistos.has(clave)) { vistos.add(clave); nombres.push(n); }
+            const f = familiaDeMaterial(m.descripcion);
+            if (f) conteo.set(f.clave, (conteo.get(f.clave) || 0) + 1);
         });
 
-        const top = nombres.slice(0, 3);
-        let detalle = top.join(", ");
-        const resto = nombres.length - top.length;
-        if (resto > 0) detalle += ` y ${resto} más`;
+        const familias = [...conteo.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([clave]) => FAMILIAS_MATERIAL.find((f) => f.clave === clave));
 
-        return `Requerimiento de ${detalle}`;
+        if (familias.length >= 1) {
+            const dom = familias[0];
+            const domCount = conteo.get(dom.clave);
+
+            // Una sola familia, o una claramente dominante (≥ 60 %).
+            if (familias.length === 1 || domCount / mats.length >= 0.6) {
+                return `Requerimiento de materiales de ${dom.etiqueta}`;
+            }
+            // Dos familias relevantes: se nombran ambas (nunca materiales).
+            if (familias.length === 2) {
+                return `Requerimiento de materiales de ${familias[0].combo} y ${familias[1].combo}`;
+            }
+            // Tres o más familias: documento multidisciplinario.
+            return partida
+                ? `Requerimiento de materiales para ${partida.toLowerCase()}`
+                : "Requerimiento de materiales, insumos y servicios";
+        }
+
+        // Ninguna familia reconocida: prioriza la partida y luego lo genérico.
+        return partida
+            ? `Requerimiento de materiales para ${partida.toLowerCase()}`
+            : "Requerimiento de materiales, insumos y servicios";
     }
 
     // Nombre de archivo seguro a partir del código + título.
@@ -2031,24 +2082,19 @@ const DocumentGenerator = (function () {
         return v || "&nbsp;";
     }
 
-    // Devuelve el HTML de la página A4 (.zdoc-page). El estilo vive en
-    // style.css (.zdoc-*) para no duplicar CSS entre visor e impresión.
-    function plantillaHTML(exp) {
-        const c = contextoEmpresaDoc(exp);
-        const mats = materialesReales(exp);
+    /* ---------- BLOQUES REUTILIZABLES DE LA PLANTILLA ----------
+       Una sola fuente para los bloques del documento. Los consumen por
+       igual la vista previa, la impresión, la exportación y el motor de
+       paginación. No se duplica marcado ni estilos. */
 
-        const filas = mats.map(filaMaterialHTML).join("");
-        const faltan = Math.max(0, MIN_FILAS_TABLA - mats.length);
-        const relleno = Array.from({ length: faltan }, filaVaciaHTML).join("");
-
+    // Encabezado institucional (logo + empresa + RUC + título) y cuadro
+    // de datos del requerimiento. Solo aparece en la PRIMERA página.
+    function cabeceraHTML(c, exp) {
         const logoHTML = c.logo
             ? `<img class="zdoc-logo-img" src="${esc(c.logo)}" alt="Logo de ${esc(c.empresa)}">`
             : `<span class="zdoc-logo-fallback">${esc((c.empresa || "ZOVRAKE").slice(0, 4).toUpperCase())}</span>`;
 
         return `
-        <div class="zdoc-page">
-            <div class="zdoc-frame">
-
                 <table class="zdoc-encabezado">
                     <colgroup><col style="width:34mm"><col></colgroup>
                     <tbody>
@@ -2097,8 +2143,13 @@ const DocumentGenerator = (function () {
                             <td class="zdoc-val" colspan="3">${celdaDato(fechaLarga(exp.fechaMaxima))}</td>
                         </tr>
                     </tbody>
-                </table>
+                </table>`;
+    }
 
+    // Apertura de la tabla de materiales (colgroup + encabezado de tabla).
+    // El encabezado de la tabla se repite en TODAS las páginas.
+    function tablaAbreHTML() {
+        return `
                 <table class="zdoc-tabla-mat">
                     <colgroup>
                         <col style="width:12mm"><col style="width:18mm"><col style="width:20mm"><col><col style="width:50mm">
@@ -2112,11 +2163,19 @@ const DocumentGenerator = (function () {
                             <th>OBSERVACIONES</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        ${filas}${relleno}
-                    </tbody>
-                </table>
+                    <tbody>`;
+    }
 
+    function tablaCierraHTML() {
+        return `
+                    </tbody>
+                </table>`;
+    }
+
+    // Lugar de entrega + firmas (Usuario / Gerencia / Jefe de Logística).
+    // Solo aparece al FINAL del último material del documento.
+    function pieHTML(exp) {
+        return `
                 <table class="zdoc-lugar">
                     <colgroup><col style="width:38mm"><col></colgroup>
                     <tbody>
@@ -2136,10 +2195,156 @@ const DocumentGenerator = (function () {
                             <td><div class="zdoc-firma-linea"></div><div class="zdoc-firma-rol">JEFE DE LOGÍSTICA</div></td>
                         </tr>
                     </tbody>
-                </table>
+                </table>`;
+    }
 
+    // Envuelve una página A4 completa.
+    function paginaHTML(cab, cuerpo, pie, sinTabla) {
+        const tabla = sinTabla ? "" : `${tablaAbreHTML()}${cuerpo}${tablaCierraHTML()}`;
+        return `
+        <div class="zdoc-page">
+            <div class="zdoc-frame">
+                ${cab}${tabla}${pie}
             </div>
         </div>`;
+    }
+
+    // Envuelve el documento (una o varias páginas) para el visor.
+    function envolverDoc(paginasHTML) {
+        return `<div class="zdoc-doc">${paginasHTML}</div>`;
+    }
+
+    /* ---------- MOTOR DE PAGINACIÓN PROFESIONAL ----------
+       Mide la altura real (px) de cada bloque para repartir las filas
+       como un documento técnico: nunca corta una fila, nunca deja hojas
+       en blanco y coloca las firmas solo al final del último material. */
+
+    function medirBloques(exp) {
+        const c = contextoEmpresaDoc(exp);
+        const mats = materialesReales(exp);
+
+        const host = document.createElement("div");
+        host.style.cssText = "position:fixed;left:-10000px;top:0;visibility:hidden;pointer-events:none;";
+        host.innerHTML = `
+            <div class="zdoc-page" data-probe="1"></div>
+            <div class="zdoc-page"><div class="zdoc-frame">
+                <div data-m="cab">${cabeceraHTML(c, exp)}</div>
+                <table class="zdoc-tabla-mat" style="margin-top:0">
+                    <colgroup><col style="width:12mm"><col style="width:18mm"><col style="width:20mm"><col><col style="width:50mm"></colgroup>
+                    <thead data-m="thead"><tr><th>ITEM</th><th>U.M.</th><th>CANTIDAD</th><th>DESCRIPCIÓN DEL MATERIAL</th><th>OBSERVACIONES</th></tr></thead>
+                    <tbody data-m="body">${mats.map(filaMaterialHTML).join("")}${filaVaciaHTML()}</tbody>
+                </table>
+                <div data-m="pie">${pieHTML(exp)}</div>
+            </div></div>`;
+        document.body.appendChild(host);
+
+        const paginas = host.querySelectorAll(".zdoc-page");
+        const probe = paginas[0];   // página vacía => A4 exacto (min-height 297mm)
+        const real = paginas[1];
+
+        const a4 = probe.offsetHeight;
+        const cs = getComputedStyle(probe);
+        const pad = parseFloat(cs.paddingTop || "0") + parseFloat(cs.paddingBottom || "0");
+
+        const cabH = real.querySelector('[data-m="cab"]').getBoundingClientRect().height;
+        const theadH = real.querySelector('[data-m="thead"]').getBoundingClientRect().height;
+        const pieH = real.querySelector('[data-m="pie"]').getBoundingClientRect().height;
+
+        const trs = [...real.querySelector('[data-m="body"]').querySelectorAll("tr")];
+        const hFilaVacia = trs.length ? trs[trs.length - 1].getBoundingClientRect().height : 22;
+        const filas = trs.slice(0, mats.length).map((tr) => tr.getBoundingClientRect().height);
+
+        host.remove();
+
+        return {
+            usable: a4 - pad - 4,   // alto disponible dentro del marco, con margen de seguridad
+            hCab: cabH,
+            hThead: theadH,
+            hPie: pieH,
+            hFilaVacia: hFilaVacia || 22,
+            filas
+        };
+    }
+
+    // Reparte los índices de fila en páginas respetando la altura útil.
+    function paginar(medida, nMats) {
+        const { usable, hCab, hThead, hPie, filas } = medida;
+        const paginas = [];
+        let i = 0;
+
+        while (i < nMats) {
+            const primera = paginas.length === 0;
+            const dispo = usable - (primera ? hCab : 0) - hThead;
+            const grupo = [];
+            let usado = 0;
+
+            while (i < nMats) {
+                const h = filas[i];
+                const ultima = (i === nMats - 1);
+                const reserva = ultima ? hPie : 0;   // el pie debe caber junto al último material
+                if (usado + h + reserva <= dispo || grupo.length === 0) {
+                    grupo.push(i);
+                    usado += h;
+                    i++;
+                    if (ultima) break;
+                } else {
+                    break;
+                }
+            }
+            paginas.push({ filas: grupo, primera, usado });
+        }
+
+        // Coloca el pie (lugar + firmas) al final del último material.
+        const ult = paginas[paginas.length - 1];
+        const dispoUlt = usable - (ult.primera ? hCab : 0) - hThead - ult.usado;
+        if (dispoUlt >= hPie) {
+            ult.pie = true;
+            ult.relleno = Math.max(0, Math.floor((dispoUlt - hPie) / medida.hFilaVacia));
+        } else {
+            paginas.push({ filas: [], primera: false, usado: 0, pie: true, soloPie: true, relleno: 0 });
+        }
+        return paginas;
+    }
+
+    // Devuelve el HTML del documento A4 (una o varias páginas .zdoc-page,
+    // envueltas en .zdoc-doc). Única fuente visual: la consumen la vista
+    // previa, la impresión y la exportación a PDF. El estilo vive en
+    // style.css (.zdoc-*) para no duplicar CSS.
+    function plantillaHTML(exp) {
+        const c = contextoEmpresaDoc(exp);
+        const mats = materialesReales(exp);
+
+        const medida = medirBloques(exp);
+        const sumaFilas = medida.filas.reduce((a, b) => a + b, 0);
+        const rellenoMin = Math.max(0, MIN_FILAS_TABLA - mats.length);
+        const alturaConMin = medida.hCab + medida.hThead + medida.hPie
+            + sumaFilas + rellenoMin * medida.hFilaVacia;
+
+        // CASO A: todo el documento cabe en una sola hoja A4. Se conserva
+        // exactamente la plantilla de una página (con filas mínimas de
+        // relleno), como el comportamiento ya aprobado.
+        if (alturaConMin <= medida.usable) {
+            const filas = mats.map(filaMaterialHTML).join("");
+            const relleno = Array.from({ length: rellenoMin }, filaVaciaHTML).join("");
+            return envolverDoc(paginaHTML(cabeceraHTML(c, exp), filas + relleno, pieHTML(exp)));
+        }
+
+        // CASO B: el contenido supera una hoja -> paginación profesional.
+        const paginas = paginar(medida, mats.length);
+        const html = paginas.map((p) => {
+            if (p.soloPie) {
+                return paginaHTML("", "", pieHTML(exp), true);
+            }
+            const filas = p.filas.map((idx) => filaMaterialHTML(mats[idx], idx)).join("");
+            const relleno = Array.from({ length: p.relleno || 0 }, filaVaciaHTML).join("");
+            return paginaHTML(
+                p.primera ? cabeceraHTML(c, exp) : "",
+                filas + relleno,
+                p.pie ? pieHTML(exp) : ""
+            );
+        }).join("");
+
+        return envolverDoc(html);
     }
 
     /* ---------- IMPRESIÓN (misma plantilla) ---------- */
@@ -2157,7 +2362,9 @@ const DocumentGenerator = (function () {
                 <style>
                     html,body{margin:0;background:#fff;}
                     body{display:block;}
-                    .zdoc-page{margin:0 auto;box-shadow:none;}
+                    .zdoc-doc{display:block;}
+                    .zdoc-page{margin:0 auto;box-shadow:none;page-break-after:always;break-after:page;}
+                    .zdoc-page:last-child{page-break-after:auto;break-after:auto;}
                     @page{size:A4;margin:0;}
                 </style>
             </head><body class="zdoc-print">
@@ -2186,34 +2393,35 @@ const DocumentGenerator = (function () {
                 host.innerHTML = plantillaHTML(exp);
                 document.body.appendChild(host);
 
-                const page = host.querySelector(".zdoc-page");
+                const paginas = [...host.querySelectorAll(".zdoc-page")];
+                const doc = new JsPDF({ unit: "pt", format: "a4" });
+                const pageW = doc.internal.pageSize.getWidth();
+                const pageH = doc.internal.pageSize.getHeight();
 
-                return html2canvas(page, { scale: 2, useCORS: true, backgroundColor: "#ffffff" })
-                    .then((canvas) => {
-                        const doc = new JsPDF({ unit: "pt", format: "a4" });
-                        const pageW = doc.internal.pageSize.getWidth();
-                        const pageH = doc.internal.pageSize.getHeight();
-
-                        const imgW = pageW;
-                        const imgH = canvas.height * imgW / canvas.width;
-                        const imgData = canvas.toDataURL("image/png");
-
-                        let heightLeft = imgH;
-                        let position = 0;
-
-                        doc.addImage(imgData, "PNG", 0, position, imgW, imgH);
-                        heightLeft -= pageH;
-
-                        while (heightLeft > 0) {
-                            position -= pageH;
-                            doc.addPage();
-                            doc.addImage(imgData, "PNG", 0, position, imgW, imgH);
-                            heightLeft -= pageH;
-                        }
-
+                // Rasteriza cada página A4 por separado: una imagen = una
+                // hoja. De este modo nunca se generan hojas en blanco ni se
+                // cortan filas entre páginas.
+                const render = (idx) => {
+                    if (idx >= paginas.length) {
                         doc.save(nombreArchivo(exp, "pdf"));
-                    })
-                    .finally(() => host.remove());
+                        return;
+                    }
+                    return html2canvas(paginas[idx], { scale: 2, useCORS: true, backgroundColor: "#ffffff" })
+                        .then((canvas) => {
+                            let imgW = pageW;
+                            let imgH = canvas.height * imgW / canvas.width;
+                            if (imgH > pageH) {            // evita desbordes que crearían hojas vacías
+                                imgH = pageH;
+                                imgW = canvas.width * imgH / canvas.height;
+                            }
+                            const x = (pageW - imgW) / 2;
+                            if (idx > 0) doc.addPage();
+                            doc.addImage(canvas.toDataURL("image/png"), "PNG", x, 0, imgW, imgH);
+                            return render(idx + 1);
+                        });
+                };
+
+                return Promise.resolve(render(0)).finally(() => host.remove());
             })
             .catch(() => imprimir(exp));
     }
@@ -2246,7 +2454,7 @@ const DocumentGenerator = (function () {
                         <td align="center">
                             <div><strong>${esc(c.empresa)}</strong></div>
                             <div>RUC ${esc(c.ruc)}</div>
-                            <div><strong>REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS</strong></div>
+                            <div><strong>${esc(tituloInteligente(exp).toUpperCase())}</strong></div>
                         </td>
                     </tr>
                 </table>
@@ -2302,7 +2510,7 @@ const DocumentGenerator = (function () {
             <head><meta charset="utf-8"></head>
             <body>
                 <table border="1">
-                    <tr><th colspan="5" style="background:#BDD7EE">${esc(c.empresa)} — REQUERIMIENTO DE MATERIALES, INSUMOS Y SERVICIOS</th></tr>
+                    <tr><th colspan="5" style="background:#BDD7EE">${esc(c.empresa)} — ${esc(tituloInteligente(exp).toUpperCase())}</th></tr>
                     <tr><td>RUC</td><td colspan="4">${esc(c.ruc)}</td></tr>
                     <tr><td>N° de Requerimiento</td><td colspan="4">${esc(exp.codigo)}</td></tr>
                     <tr><td>Obra</td><td colspan="4">${esc(exp.obra)}</td></tr>
@@ -3262,7 +3470,9 @@ const Documentos = (function () {
     }
 
     function paginaVisor() {
-        return document.querySelector("#zviewer-canvas .zdoc-page");
+        // El documento puede tener una o varias páginas: se opera sobre
+        // el contenedor .zdoc-doc para medir/escalar todo el conjunto.
+        return document.querySelector("#zviewer-canvas .zdoc-doc");
     }
 
     function medirPagina() {
