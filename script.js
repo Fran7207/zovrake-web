@@ -1650,7 +1650,7 @@ const RequerimientosDB = (function () {
         aprenderDeExpediente(exp);
 
         registrarActividad({ tipo: "enviado", texto: "Expediente Digital generado", codigo: exp.codigo });
-        registrarNotificacion({ texto: `Nuevo expediente ${exp.codigo} · ${exp.obra}`, codigo: exp.codigo });
+        registrarNotificacion({ tipo: "nuevo", texto: `Nuevo expediente ${exp.codigo} · ${exp.obra}`, codigo: exp.codigo });
         registrarDocumentos(exp);
 
         return exp;
@@ -1672,14 +1672,68 @@ const RequerimientosDB = (function () {
         return leer(K.actividad, []);
     }
 
+    // Notifica al resto de la aplicación que la bandeja de
+    // notificaciones cambió, para que el contador global y la Lista
+    // se actualicen SIN recargar. No transporta datos: los
+    // consumidores releen la única fuente de verdad (este repositorio).
+    function emitirCambioNotificaciones(motivo) {
+        try {
+            window.dispatchEvent(new CustomEvent("zovrake:notificaciones", {
+                detail: { motivo: motivo || "cambio" }
+            }));
+        } catch (error) {
+            /* Entornos sin CustomEvent: la persistencia ya ocurrió. */
+        }
+    }
+
+    // Forma estable de una notificación (compatibilidad con registros
+    // previos que solo guardaban texto/codigo/en). NO duplica datos de
+    // negocio: empresa, obra, estado y responsable se resuelven en vivo
+    // desde el Expediente por su código.
+    function normalizarNotificacion(n) {
+        const base = n || {};
+        return {
+            id:     base.id || ("ntf-" + (base.en || Date.now()).toString(36) + "-" + Math.random().toString(36).slice(2, 6)),
+            tipo:   base.tipo || "evento",
+            texto:  base.texto || "",
+            codigo: base.codigo || "",
+            leida:  base.leida === true,
+            en:     base.en || Date.now()
+        };
+    }
+
+    // Registra un evento importante del ERP (lo invoca el flujo real:
+    // generación de expediente, envío a Logística, etc.). Toda nueva
+    // notificación nace como NO leída.
     function registrarNotificacion(notif) {
         const lista = leer(K.notificaciones, []);
-        lista.unshift({ ...notif, en: Date.now() });
-        escribir(K.notificaciones, recortar(lista, 30));
+        lista.unshift(normalizarNotificacion({ ...notif, leida: false, en: Date.now() }));
+        escribir(K.notificaciones, recortar(lista, 60));
+        emitirCambioNotificaciones("nueva");
     }
 
     function listarNotificaciones() {
-        return leer(K.notificaciones, []);
+        return leer(K.notificaciones, []).map(normalizarNotificacion);
+    }
+
+    // Marca TODAS las notificaciones como leídas (al entrar al
+    // submódulo). Solo persiste y avisa si hubo un cambio real.
+    function marcarNotificacionesLeidas() {
+        const lista = leer(K.notificaciones, []).map(normalizarNotificacion);
+        let cambio = false;
+        lista.forEach((n) => { if (!n.leida) { n.leida = true; cambio = true; } });
+        if (cambio) {
+            escribir(K.notificaciones, lista);
+            emitirCambioNotificaciones("leida");
+        }
+        return cambio;
+    }
+
+    // Cantidad de notificaciones sin leer (alimenta el contador global).
+    function contarNotificacionesNoLeidas() {
+        return leer(K.notificaciones, [])
+            .map(normalizarNotificacion)
+            .filter((n) => !n.leida).length;
     }
 
     function registrarDocumentos(exp) {
@@ -1734,7 +1788,7 @@ const RequerimientosDB = (function () {
         guardarColeccion(lista);
 
         registrarActividad({ tipo: "logistica", texto: "Expediente enviado a Logística", codigo });
-        registrarNotificacion({ texto: `Expediente ${codigo} enviado a Logística`, codigo });
+        registrarNotificacion({ tipo: "logistica", texto: `Expediente ${codigo} enviado a Logística`, codigo });
 
         return lista[idx];
     }
@@ -1744,6 +1798,7 @@ const RequerimientosDB = (function () {
         sugerirCampo, sugerirPartidas, sugerirMateriales, umDeMaterial,
         listarExpedientes, guardarBorrador, generarExpediente,
         listarActividad, listarNotificaciones, listarDocumentos,
+        marcarNotificacionesLeidas, contarNotificacionesNoLeidas,
         expedientePorCodigo, marcarEnviadoLogistica
     };
 })();
@@ -4914,6 +4969,449 @@ const Seguimiento = (function () {
     return { render, montar };
 })();
 
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "NOTIFICACIONES"
+   ----------------------------------------------------------
+   Responsabilidad ÚNICA: comunicar automáticamente al usuario
+   los eventos importantes del ERP. NO crea requerimientos, NO
+   cambia estados, NO genera documentos, NO administra
+   expedientes; solo comunica.
+
+   Reutiliza por completo la arquitectura existente (nada
+   paralelo, ninguna base de datos nueva):
+     · Datos      -> RequerimientosDB.listarNotificaciones()
+                     (Notification Engine: única fuente de verdad).
+     · Contexto   -> RequerimientosDB.expedientePorCodigo() +
+                     Configuración General (empresa) y
+                     DocumentGenerator.tituloInteligente(): la
+                     empresa, obra, estado, responsable, prioridad
+                     y título se resuelven EN VIVO (sin duplicar).
+     · Acciones   -> ReqWorkspace.irATab / Documentos.abrirVisor.
+     · Estilos    -> tokens --dash-*, .pc-tag-*, .pc-empty,
+                     patrón .zdoc-toast. Todo con prefijo .ntf-.
+
+   Cada FILA representa UN evento importante (nunca un material,
+   un documento, una partida ni una orden de compra).
+   ========================================================== */
+
+const Notificaciones = (function () {
+
+    // Estado de INTERFAZ (no es información de negocio): qué
+    // notificación está abierta y qué ids se mostraban como "nuevas"
+    // al entrar (para no reagrupar la lista al marcarlas leídas).
+    const estado = { seleccion: null, nuevas: new Set() };
+
+    // Etiqueta profesional del evento según su tipo. Cubre el catálogo
+    // completo de eventos del ERP para que, cuando otros módulos
+    // (Logística, Tesorería, Gerencia…) emitan, la Lista los muestre
+    // con un título corporativo. Hoy el flujo real emite "nuevo" y
+    // "logistica"; el resto se comunicará cuando esos módulos existan.
+    const EVENTOS = {
+        nuevo:                  "Nuevo requerimiento registrado",
+        enviado:                "Requerimiento enviado a Logística",
+        logistica:              "Requerimiento enviado a Logística",
+        aprobado:               "Requerimiento aprobado",
+        observado:              "Requerimiento observado",
+        rechazado:              "Requerimiento rechazado",
+        cerrado:                "Requerimiento cerrado",
+        "documento-generado":   "Documento generado",
+        "documento-enviado":    "Documento enviado",
+        "documento-archivado":  "Documento archivado",
+        "logistica-recibido":   "Requerimiento recibido en Logística",
+        "cotizacion-iniciada":  "Cotización iniciada",
+        "cotizacion-finalizada":"Cotización finalizada",
+        "orden-compra":         "Orden de compra emitida",
+        "material-recibido":    "Material recibido",
+        "orden-pago":           "Orden de pago creada",
+        "pago-aprobado":        "Pago aprobado",
+        "transferencia":        "Transferencia realizada",
+        "solicitud-pendiente":  "Solicitud pendiente",
+        "solicitud-aprobada":   "Solicitud aprobada",
+        "solicitud-rechazada":  "Solicitud rechazada",
+        evento:                 "Evento del sistema"
+    };
+
+    /* ---------- Utilidades (reutilizan PanelUtils) ---------- */
+
+    function esc(t) {
+        return PanelUtils.escapar(t == null ? "" : t);
+    }
+
+    function expediente(codigo) {
+        return codigo ? RequerimientosDB.expedientePorCodigo(codigo) : null;
+    }
+
+    function empresaDe(exp) {
+        if (exp && exp.empresaId && typeof ConfiguracionDB !== "undefined") {
+            const c = ConfiguracionDB.contextoEmpresa(exp.empresaId);
+            if (c && c.nombre) return c.nombre;
+        }
+        return (exp && exp.empresa) || "—";
+    }
+
+    function estadoLabel(exp) {
+        const clave = exp && exp.estado;
+        return (clave && ExpedienteDigital.ESTADOS && ExpedienteDigital.ESTADOS[clave]) || "—";
+    }
+
+    function prioridadDe(exp) {
+        return (exp && exp.prioridad) || "Media";
+    }
+
+    function fechaMs(ms) {
+        if (!ms) return "—";
+        const d = new Date(ms);
+        return isNaN(d.getTime()) ? "—" : PanelUtils.fecha(d);
+    }
+
+    function horaMs(ms) {
+        if (!ms) return "—";
+        const d = new Date(ms);
+        if (isNaN(d.getTime())) return "—";
+        return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    }
+
+    function tituloEvento(n) {
+        return EVENTOS[n.tipo] || EVENTOS.evento;
+    }
+
+    // Vista previa del evento: el título inteligente del requerimiento
+    // relacionado (si existe) o, en su defecto, el resumen del evento.
+    function vistaPrevia(n, exp) {
+        if (exp) return DocumentGenerator.tituloInteligente(exp);
+        return n.texto || tituloEvento(n);
+    }
+
+    /* ---------- ORIGEN DE DATOS (solo lectura) ---------- */
+
+    function listar() {
+        try {
+            return RequerimientosDB.listarNotificaciones();
+        } catch (error) {
+            return [];
+        }
+    }
+
+    /* ---------- LISTA DE NOTIFICACIONES ---------- */
+
+    function esNueva(n) {
+        return estado.nuevas.has(n.id);
+    }
+
+    function filaHTML(n) {
+        const exp = expediente(n.codigo);
+        const prio = prioridadDe(exp);
+        const activa = estado.seleccion === n.id;
+
+        const contexto = exp
+            ? `<span class="ntf-meta-item">${esc(empresaDe(exp))}</span>
+               <span class="ntf-meta-item">${esc(exp.obra || "—")}</span>`
+            : "";
+
+        return `
+            <button class="ntf-item${esNueva(n) ? " is-new" : " is-read"}${activa ? " is-active" : ""}"
+                type="button" data-ntf-id="${esc(n.id)}" tabindex="0">
+                <span class="ntf-dot" aria-hidden="true"></span>
+                <span class="ntf-body">
+                    <span class="ntf-row1">
+                        <span class="ntf-evt">${esc(tituloEvento(n))}</span>
+                        <span class="pc-tag pc-tag-prio is-${esc(prio.toLowerCase())}">${esc(prio)}</span>
+                    </span>
+                    <span class="ntf-preview">${esc(vistaPrevia(n, exp))}</span>
+                    <span class="ntf-meta">
+                        <span class="ntf-meta-item ntf-cod">${esc(n.codigo || "—")}</span>
+                        ${contexto}
+                        <span class="ntf-meta-item ntf-fecha">${fechaMs(n.en)} · ${horaMs(n.en)}</span>
+                    </span>
+                </span>
+                <span class="ntf-estado" aria-hidden="true">${esNueva(n) ? "Nueva" : "Leída"}</span>
+            </button>`;
+    }
+
+    function grupoHTML(titulo, items) {
+        if (!items.length) return "";
+        return `
+            <div class="ntf-group">
+                <p class="pc-label">${esc(titulo)} <span class="ntf-count">${items.length}</span></p>
+                <div class="ntf-items">${items.map(filaHTML).join("")}</div>
+            </div>`;
+    }
+
+    function listaHTML() {
+        const lista = listar();
+
+        if (!lista.length) {
+            return `
+                <div class="pc-empty ntf-vacio">
+                    No hay notificaciones. Los eventos importantes del ERP
+                    aparecerán aquí automáticamente conforme se generen.
+                </div>`;
+        }
+
+        const nuevas = lista.filter(esNueva);
+        const leidas = lista.filter((n) => !esNueva(n));
+
+        return grupoHTML("Notificaciones nuevas", nuevas) + grupoHTML("Notificaciones leídas", leidas);
+    }
+
+    /* ---------- INFORMACIÓN DE LA NOTIFICACIÓN ---------- */
+
+    function campo(label, valor) {
+        return `
+            <div class="ntf-field">
+                <span class="ntf-field-label">${esc(label)}</span>
+                <span class="ntf-field-value">${esc(valor)}</span>
+            </div>`;
+    }
+
+    function accionesHTML(exp) {
+        const generado = !!(exp && exp.estado && exp.estado !== "borrador");
+        const btn = (act, etiqueta, icono) => `
+            <button class="pc-action" type="button" data-ntf-act="${act}">
+                <span class="pc-action-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${icono}"/></svg>
+                </span>${etiqueta}
+            </button>`;
+
+        const acciones = [
+            btn("requerimiento", "Abrir Requerimiento", "M4 6h16M4 12h16M4 18h10"),
+            btn("seguimiento", "Abrir Seguimiento", "M4 18 9 12l4 4 7-8")
+        ];
+
+        if (generado) {
+            acciones.push(btn("expediente", "Abrir Expediente", "M7 4h7l4 4v12H7zM14 4v4h4"));
+            acciones.push(btn("documento", "Abrir Documento", "M7 3h10v18l-5-3-5 3z"));
+        }
+
+        return `
+            <section class="pc-section ntf-acciones">
+                <p class="pc-label">Acciones disponibles</p>
+                <div class="pc-actions">${acciones.join("")}</div>
+            </section>`;
+    }
+
+    function detalleHTML() {
+        const n = estado.seleccion ? listar().find((x) => x.id === estado.seleccion) : null;
+
+        if (!n) {
+            return `
+                <div class="pc-empty ntf-hint">
+                    Selecciona una notificación para ver su información completa.
+                </div>`;
+        }
+
+        const exp = expediente(n.codigo);
+
+        return `
+            <article class="ntf-detalle">
+                <header class="ntf-detalle-head">
+                    <span class="pc-tag pc-tag-prio is-${esc(prioridadDe(exp).toLowerCase())}">${esc(prioridadDe(exp))}</span>
+                    <h3 class="ntf-detalle-title">${esc(tituloEvento(n))}</h3>
+                </header>
+
+                <p class="ntf-desc">${esc(n.texto || tituloEvento(n))}</p>
+
+                <div class="ntf-info-grid">
+                    ${campo("Empresa", exp ? empresaDe(exp) : "—")}
+                    ${campo("Obra", exp ? (exp.obra || "—") : "—")}
+                    ${campo("Código", n.codigo || "—")}
+                    ${campo("Usuario responsable", exp ? (exp.requeridoPor || "—") : "—")}
+                    ${campo("Fecha", fechaMs(n.en))}
+                    ${campo("Hora", horaMs(n.en))}
+                    ${campo("Estado actual", estadoLabel(exp))}
+                </div>
+
+                ${accionesHTML(exp)}
+            </article>`;
+    }
+
+    /* ---------- RENDER ---------- */
+
+    function render() {
+        return `
+            <section class="ntf">
+                <header class="ntf-head">
+                    <h2 class="ntf-title">Notificaciones</h2>
+                    <p class="ntf-sub">Eventos importantes del ERP comunicados automáticamente. Abre el módulo correspondiente sin salir del flujo.</p>
+                </header>
+                <div class="ntf-layout">
+                    <div class="ntf-list" id="ntf-list">${listaHTML()}</div>
+                    <div class="ntf-panel" id="ntf-panel">${detalleHTML()}</div>
+                </div>
+            </section>`;
+    }
+
+    // Entrada al submódulo: fija qué notificaciones eran "nuevas" en
+    // este ingreso (para conservar el agrupamiento aunque se marquen
+    // leídas de inmediato) y limpia la selección previa.
+    function entrar() {
+        estado.nuevas = new Set(listar().filter((n) => !n.leida).map((n) => n.id));
+        estado.seleccion = null;
+    }
+
+    /* ---------- REPINTADO ---------- */
+
+    function repintar() {
+        const ws = document.getElementById("req-workspace");
+        if (!ws) return;
+        ws.innerHTML = render();
+        montar(ws);
+    }
+
+    // Repintado quirúrgico del panel de información (al seleccionar).
+    function repintarPanel() {
+        const panel = document.getElementById("ntf-panel");
+        if (panel) panel.innerHTML = detalleHTML();
+
+        // Sincroniza el resaltado de la fila activa sin reconstruir la lista.
+        document.querySelectorAll(".ntf-item").forEach((el) => {
+            el.classList.toggle("is-active", el.dataset.ntfId === estado.seleccion);
+        });
+    }
+
+    function seleccionar(id) {
+        estado.seleccion = id;
+        repintarPanel();
+    }
+
+    // Marca como leídas al entrar (difiere un tick para preservar la
+    // agrupación "Nuevas" que se calculó en el render de entrada).
+    function marcarEntrada() {
+        setTimeout(() => {
+            try { RequerimientosDB.marcarNotificacionesLeidas(); } catch (error) {}
+        }, 0);
+    }
+
+    // Actualización automática ante un evento nuevo mientras el
+    // submódulo está visible: añade la novedad al grupo "Nuevas",
+    // conserva la selección y repinta.
+    function refrescar() {
+        listar().filter((n) => !n.leida).forEach((n) => estado.nuevas.add(n.id));
+        repintar();
+    }
+
+    function estaActiva() {
+        const t = document.querySelector(".req-tab.active");
+        return !!t && t.dataset.reqTab === "notificaciones";
+    }
+
+    /* ---------- ACCIONES (reutilizan módulos existentes) ---------- */
+
+    function ejecutar(accion) {
+        const n = estado.seleccion ? listar().find((x) => x.id === estado.seleccion) : null;
+        const codigo = n ? n.codigo : null;
+        const exp = expediente(codigo);
+
+        if (!exp) { toast("El requerimiento asociado ya no está disponible.", "error"); return; }
+
+        if (accion === "requerimiento") {
+            ReqWorkspace.irATab(exp.enviadoLogistica ? "archivo" : "bandeja-trabajo");
+        } else if (accion === "seguimiento") {
+            ReqWorkspace.irATab("seguimiento", { codigo });
+        } else if (accion === "expediente") {
+            if (exp.estado && exp.estado !== "borrador") Documentos.abrirVisor(codigo);
+            else toast("Es un borrador: aún no tiene expediente oficial.", "error");
+        } else if (accion === "documento") {
+            ReqWorkspace.irATab(exp.enviadoLogistica ? "archivo" : "documentos");
+        }
+    }
+
+    /* ---------- TOAST (reutiliza la estética .zdoc-toast) ---------- */
+
+    function toast(mensaje, tipo) {
+        let t = document.getElementById("ntf-toast");
+        if (!t) {
+            t = document.createElement("div");
+            t.id = "ntf-toast";
+            t.className = "zdoc-toast";
+            document.body.appendChild(t);
+        }
+        t.className = `zdoc-toast is-${tipo === "error" ? "error" : "ok"} is-visible`;
+        t.textContent = mensaje;
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => { t.classList.remove("is-visible"); }, 3200);
+    }
+
+    /* ---------- MONTAJE / WIRING ---------- */
+
+    function montar(ws) {
+        if (!ws) return;
+
+        // Delegación única sobre la raíz .ntf (se reconstruye en cada
+        // render, por lo que no acumula listeners en #req-workspace).
+        const raiz = ws.querySelector(".ntf");
+        if (raiz && !raiz.dataset.ntfReady) {
+            raiz.dataset.ntfReady = "true";
+
+            raiz.addEventListener("click", (evento) => {
+                const accionBtn = evento.target.closest("[data-ntf-act]");
+                if (accionBtn) { ejecutar(accionBtn.dataset.ntfAct); return; }
+
+                const fila = evento.target.closest(".ntf-item");
+                if (fila) seleccionar(fila.dataset.ntfId);
+            });
+
+            raiz.addEventListener("keydown", (evento) => {
+                if (evento.key !== "Enter") return;
+                const fila = evento.target.closest(".ntf-item");
+                if (fila) { evento.preventDefault(); seleccionar(fila.dataset.ntfId); }
+            });
+        }
+
+        marcarEntrada();
+    }
+
+    return { entrar, render, montar, refrescar, estaActiva };
+})();
+
+/* --------------------------------------------------------
+   CONTADOR GLOBAL DE NOTIFICACIONES
+   --------------------------------------------------------
+   Pertenece al ENCABEZADO GLOBAL del ERP (ítem de menú
+   "Notificaciones") y a la pestaña del módulo, no al submódulo.
+   Refleja en vivo las notificaciones sin leer y se actualiza
+   por el evento 'zovrake:notificaciones' (sin recargar la app).
+   No consulta otra fuente: relee RequerimientosDB.
+   -------------------------------------------------------- */
+
+const NotificacionesGlobal = (function () {
+
+    function contador() {
+        try { return RequerimientosDB.contarNotificacionesNoLeidas(); }
+        catch (error) { return 0; }
+    }
+
+    function pintar(el, n) {
+        if (!el) return;
+        if (n > 0) {
+            el.textContent = n > 99 ? "99+" : String(n);
+            el.hidden = false;
+        } else {
+            el.textContent = "";
+            el.hidden = true;
+        }
+    }
+
+    function actualizar() {
+        const n = contador();
+        pintar(document.getElementById("nav-notif-badge"), n);
+        pintar(document.getElementById("tab-notif-badge"), n);
+    }
+
+    function iniciar() {
+        actualizar();
+        window.addEventListener("zovrake:notificaciones", (evento) => {
+            actualizar();
+            const motivo = evento.detail && evento.detail.motivo;
+            if (motivo === "nueva" && typeof Notificaciones !== "undefined" && Notificaciones.estaActiva()) {
+                Notificaciones.refrescar();
+            }
+        });
+    }
+
+    return { iniciar, actualizar };
+})();
+
 const ReqWorkspace = (function () {
 
     function contenedor() {
@@ -4973,6 +5471,10 @@ const ReqWorkspace = (function () {
         } else if (claveTab === "archivo") {
             ws.innerHTML = Documentos.render("archivo");
             Documentos.montar(ws, "archivo");
+        } else if (claveTab === "notificaciones") {
+            Notificaciones.entrar();
+            ws.innerHTML = Notificaciones.render();
+            Notificaciones.montar(ws);
         } else {
             ws.innerHTML = placeholder(claveTab, params);
         }
@@ -6031,7 +6533,7 @@ const Router = (function () {
         "/maquinaria":      { vista: "modulo", etiqueta: "Maquinaria" },
         "/gerencia":        { vista: "modulo", etiqueta: "Gerencia Administrativa" },
         "/ayuda":           { vista: "modulo", etiqueta: "Centro de Ayuda" },
-        "/notificaciones":  { vista: "modulo", etiqueta: "Notificaciones" },
+        "/notificaciones":  { vista: "requerimientos", reqTab: "notificaciones" },
         "/perfil":          { vista: "perfil" },
         "/configuracion":   { vista: "configuracion" }
     };
@@ -6073,6 +6575,13 @@ const Router = (function () {
             Tooltips.ocultar();
             if (navItem) marcarItemActivo(navItem);
             mostrarVistaDashboard(config.vista, config.etiqueta);
+
+            // Enlace profundo a una pestaña interna del módulo (p. ej. el
+            // ítem global "Notificaciones" abre su submódulo). Reutiliza
+            // la navegación interna existente; no crea rutas nuevas.
+            if (config.reqTab && typeof ReqWorkspace !== "undefined") {
+                ReqWorkspace.irATab(config.reqTab);
+            }
         };
 
         if (animar) {
@@ -6471,6 +6980,10 @@ if (domListo) {
     // Submódulo Panel de Control: monta el contenido dentro del
     // contenedor #req-workspace ya existente (no crea páginas nuevas).
     ReqWorkspace.iniciar();
+
+    // Contador global de notificaciones (encabezado del ERP): refleja
+    // en vivo las notificaciones sin leer y se autoactualiza.
+    NotificacionesGlobal.iniciar();
 
     // Módulo "Configuración General": monta el contenido dentro del
     // contenedor #cfg-root ya existente (núcleo del ERP).

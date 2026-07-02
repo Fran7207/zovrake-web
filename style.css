@@ -5295,3 +5295,390 @@ body.zviewer-open{
         text-align: right;
     }
 }
+
+/* ==========================================================
+   CONTADOR GLOBAL DE NOTIFICACIONES (badges)
+   ----------------------------------------------------------
+   Vive en el encabezado global (ítem de menú) y en la pestaña
+   del módulo. Reutiliza los tokens del Dashboard; el rojo de
+   aviso coincide con el token de prioridad urgente del Panel.
+   ========================================================== */
+
+.dashboard-nav-badge,
+.req-tab-badge{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+
+    background: #C5463B;
+    color: #FFFFFF;
+
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+
+    border-radius: 9px;
+}
+
+.dashboard-nav-badge[hidden],
+.req-tab-badge[hidden]{
+    display: none;
+}
+
+/* En LAYOUT 1 (Home) el ítem es una fila: el badge se alinea a la
+   derecha. En LAYOUT 2 (rail profesional) flota sobre el icono. */
+.dashboard-nav-badge{
+    margin-left: auto;
+}
+
+.dashboard-screen.layout-pro .dashboard-nav-item{
+    position: relative;
+}
+
+.dashboard-screen.layout-pro .dashboard-nav-badge{
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    margin: 0;
+}
+
+.req-tab-badge{
+    min-width: 16px;
+    height: 16px;
+    margin-left: 6px;
+    font-size: 10.5px;
+    vertical-align: middle;
+}
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "NOTIFICACIONES"
+   ----------------------------------------------------------
+   Vive dentro de #req-workspace. Reutiliza los tokens del
+   Dashboard (--dash-*), los de estado/prioridad del Panel
+   (.pc-tag-*), .pc-empty y el patrón de acciones (.pc-action).
+   Solo aporta la Lista y el panel de Información. Prefijo .ntf-.
+   ========================================================== */
+
+.ntf{
+    /* Tokens de estado/prioridad (mismo alcance local que el Panel,
+       para que .pc-tag-* resuelva dentro del submódulo). */
+    --pc-borrador:  #8A8578;
+    --pc-enviado:   #3B7DD8;
+    --pc-observado: #C98A1E;
+    --pc-aprobado:  #2E9E5B;
+    --pc-rechazado: #C5463B;
+    --pc-cerrado:   #6B7280;
+    --pc-urgente:   #C5463B;
+    --pc-radius:    14px;
+
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.ntf-head{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ntf-title{
+    color: var(--dash-text);
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.ntf-sub{
+    color: var(--dash-text-soft);
+    font-size: 13.5px;
+    max-width: 640px;
+}
+
+.ntf-layout{
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+
+/* ---------- Lista de Notificaciones ---------- */
+
+.ntf-list{
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.ntf-count{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 20px;
+    height: 18px;
+    padding: 0 6px;
+
+    background: var(--dash-active);
+    color: var(--dash-text-soft);
+
+    font-size: 11px;
+    font-weight: 700;
+
+    border-radius: 9px;
+}
+
+.ntf-items{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ntf-item{
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+
+    width: 100%;
+    text-align: left;
+
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+
+    padding: 12px 14px;
+
+    cursor: pointer;
+
+    transition: background 0.18s, border-color 0.18s, transform 0.15s;
+}
+
+.ntf-item:hover{
+    background: var(--dash-hover);
+    border-color: var(--dash-accent);
+    transform: translateY(-1px);
+}
+
+.ntf-item.is-active{
+    border-color: var(--dash-accent);
+    box-shadow: 0 8px 22px rgba(38, 36, 30, 0.10);
+}
+
+.ntf-item.is-new{
+    border-left: 3px solid var(--dash-accent);
+}
+
+.ntf-dot{
+    flex-shrink: 0;
+
+    width: 9px;
+    height: 9px;
+    margin-top: 5px;
+
+    border-radius: 50%;
+    background: var(--dash-border);
+}
+
+.ntf-item.is-new .ntf-dot{
+    background: var(--dash-accent);
+}
+
+.ntf-body{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    min-width: 0;
+    flex: 1;
+}
+
+.ntf-row1{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.ntf-evt{
+    color: var(--dash-text);
+    font-size: 14px;
+    font-weight: 700;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ntf-preview{
+    color: var(--dash-text);
+    font-size: 13px;
+
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ntf-meta{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+
+    color: var(--dash-text-soft);
+    font-size: 12px;
+}
+
+.ntf-meta-item{
+    display: inline-flex;
+    align-items: center;
+}
+
+.ntf-meta-item + .ntf-meta-item::before{
+    content: "·";
+    margin-right: 8px;
+    color: var(--dash-border);
+}
+
+.ntf-cod{
+    font-weight: 600;
+    color: var(--dash-text);
+}
+
+.ntf-estado{
+    flex-shrink: 0;
+    align-self: center;
+
+    color: var(--dash-text-soft);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.ntf-item.is-new .ntf-estado{
+    color: var(--dash-accent);
+}
+
+.ntf-vacio{
+    margin: 0;
+}
+
+/* ---------- Información de la Notificación ---------- */
+
+.ntf-panel{
+    position: sticky;
+    top: 0;
+}
+
+.ntf-hint{
+    margin: 0;
+}
+
+.ntf-detalle{
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: var(--pc-radius);
+
+    padding: 18px;
+}
+
+.ntf-detalle-head{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    margin-bottom: 10px;
+}
+
+.ntf-detalle-title{
+    color: var(--dash-text);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.ntf-desc{
+    color: var(--dash-text);
+    font-size: 13.5px;
+    line-height: 1.5;
+
+    padding-bottom: 14px;
+    margin-bottom: 4px;
+
+    border-bottom: 1px solid var(--dash-border);
+}
+
+.ntf-info-grid{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 18px;
+
+    margin: 14px 0 6px;
+}
+
+.ntf-field{
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+
+    min-width: 0;
+}
+
+.ntf-field-label{
+    color: var(--dash-text-soft);
+
+    font-size: 11.5px;
+    font-weight: 600;
+
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ntf-field-value{
+    color: var(--dash-text);
+    font-size: 14px;
+    font-weight: 500;
+
+    overflow-wrap: anywhere;
+}
+
+.ntf-acciones{
+    margin-top: 16px;
+    padding-top: 16px;
+
+    border-top: 1px solid var(--dash-border);
+}
+
+/* ==========================================================
+   RESPONSIVE — NOTIFICACIONES
+   ----------------------------------------------------------
+   En pantallas medianas el panel de Información pasa debajo de
+   la Lista; en móvil la información se apila. No se oculta
+   ningún dato importante.
+   ========================================================== */
+
+@media (max-width: 900px){
+
+    .ntf-layout{
+        grid-template-columns: 1fr;
+    }
+
+    .ntf-panel{
+        position: static;
+    }
+}
+
+@media (max-width: 520px){
+
+    .ntf-info-grid{
+        grid-template-columns: 1fr;
+    }
+
+    .ntf-row1{
+        flex-wrap: wrap;
+    }
+
+    .ntf-estado{
+        display: none;
+    }
+}
