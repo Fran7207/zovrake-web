@@ -4910,3 +4910,176 @@ body.zviewer-open{
         padding: 12px;
     }
 }
+
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "BANDEJA DE TRABAJO"
+   ----------------------------------------------------------
+   Centro operativo del residente. Reutiliza la identidad
+   visual del Dashboard (--dash-*), las etiquetas de estado /
+   prioridad (.pc-tag-*) y el patrón de bandeja de Documentos
+   (.zdoc-bj, .zdoc-kebab, .zdoc-menu, .zdoc-toast). Solo aporta
+   la barra de herramientas y ajustes propios de la lista.
+   ========================================================== */
+
+.bt{
+    /* Tokens de estado/prioridad (mismo alcance local que el Panel,
+       para que .pc-tag-* resuelva dentro de la Bandeja). */
+    --pc-borrador:  #8A8578;
+    --pc-enviado:   #3B7DD8;
+    --pc-observado: #C98A1E;
+    --pc-aprobado:  #2E9E5B;
+    --pc-rechazado: #C5463B;
+    --pc-cerrado:   #6B7280;
+    --pc-urgente:   #C5463B;
+
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.bt-head{
+    display: block;
+}
+
+.bt-title{
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--dash-text);
+}
+
+.bt-sub{
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--dash-text-soft);
+}
+
+/* ---------- Barra de herramientas ---------- */
+
+.bt-toolbar{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: var(--dash-sidebar);
+    border: 1px solid var(--dash-border);
+    border-radius: 12px;
+}
+
+.bt-search{
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+
+.bt-search svg{
+    position: absolute;
+    left: 11px;
+    width: 16px;
+    height: 16px;
+    color: var(--dash-text-soft);
+    pointer-events: none;
+}
+
+.bt-search-input{
+    width: 100%;
+    padding: 9px 12px 9px 34px;
+    font-size: 13.5px;
+    color: var(--dash-text);
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 9px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.bt-search-input:focus{
+    border-color: var(--dash-accent);
+}
+
+.bt-select{
+    flex: 0 1 auto;
+    max-width: 170px;
+    padding: 9px 12px;
+    font-size: 13px;
+    color: var(--dash-text);
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 9px;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.bt-select:focus{
+    border-color: var(--dash-accent);
+}
+
+.bt-date{
+    cursor: text;
+}
+
+.bt-refresh{
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-left: auto;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--dash-text);
+    background: var(--dash-bg);
+    border: 1px solid var(--dash-border);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.bt-refresh svg{
+    width: 16px;
+    height: 16px;
+}
+
+.bt-refresh:hover{
+    background: var(--dash-hover);
+    border-color: var(--dash-accent);
+}
+
+/* ---------- Lista / conteo ---------- */
+
+.bt-count{
+    font-size: 12.5px;
+    color: var(--dash-text-soft);
+    margin-bottom: 10px;
+}
+
+/* Título inteligente: legible y sin romper el ancho de la tabla. */
+.bt-table .zdoc-bj-tit{
+    min-width: 240px;
+    max-width: 360px;
+    font-weight: 500;
+}
+
+@media (max-width: 640px){
+
+    .bt-refresh{
+        margin-left: 0;
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+
+    .bt-select,
+    .bt-date{
+        flex: 1 1 calc(50% - 5px);
+        max-width: none;
+    }
+
+    /* En tarjetas (patrón .zdoc-bj heredado), el título recupera
+       su ancho natural para no cortarse. */
+    .bt-table .zdoc-bj-tit{
+        min-width: 0;
+        max-width: none;
+    }
+}

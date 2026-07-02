@@ -766,57 +766,12 @@ const ExpedienteDigital = (function () {
     // Peso de prioridad para ordenar lo más importante primero.
     const PESO_PRIORIDAD = { Urgente: 4, Alta: 3, Media: 2, Baja: 1 };
 
-    // Fuente de muestra del Expediente Digital. Las fechas se
-    // expresan como desfases en días respecto de "hoy" para que los
-    // vencimientos y la actividad sean coherentes en cualquier fecha.
-    const FUENTE = [
-        { codigo: "REQ-0001", obra: "Torre Norte",      prioridad: "Urgente", estado: "borrador",  responsable: "C. Rivas",  creado: -1,  limite: 2  },
-        { codigo: "REQ-0002", obra: "Planta Sur",       prioridad: "Alta",    estado: "enviado",   responsable: "M. Díaz",   creado: -2,  limite: 5  },
-        { codigo: "REQ-0003", obra: "Puente Río",       prioridad: "Media",   estado: "observado", responsable: "L. Pérez",  creado: -3,  limite: 1  },
-        { codigo: "REQ-0004", obra: "Edificio Central", prioridad: "Urgente", estado: "enviado",   responsable: "C. Rivas",  creado: -2,  limite: 3  },
-        { codigo: "REQ-0005", obra: "Vía Expressa",     prioridad: "Baja",    estado: "aprobado",  responsable: "A. Soto",   creado: -8,  limite: 12 },
-        { codigo: "REQ-0006", obra: "Torre Norte",      prioridad: "Alta",    estado: "cerrado",   responsable: "M. Díaz",   creado: -14, limite: -3 },
-        { codigo: "REQ-0007", obra: "Planta Sur",       prioridad: "Urgente", estado: "observado", responsable: "L. Pérez",  creado: -4,  limite: 1  },
-        { codigo: "REQ-0008", obra: "Almacén 4",        prioridad: "Media",   estado: "borrador",  responsable: "A. Soto",   creado: 0,   limite: 9  },
-        { codigo: "REQ-0009", obra: "Edificio Central", prioridad: "Alta",    estado: "rechazado", responsable: "C. Rivas",  creado: -6,  limite: 7  },
-        { codigo: "REQ-0010", obra: "Puente Río",       prioridad: "Urgente", estado: "enviado",   responsable: "M. Díaz",   creado: -5,  limite: -1 },
-        { codigo: "REQ-0011", obra: "Vía Expressa",     prioridad: "Media",   estado: "aprobado",  responsable: "L. Pérez",  creado: -9,  limite: 15 },
-        { codigo: "REQ-0012", obra: "Torre Norte",      prioridad: "Baja",    estado: "cerrado",   responsable: "A. Soto",   creado: -20, limite: -8 }
-    ];
-
-    // Actividad reciente (línea de tiempo). `hace` en horas.
-    const ACTIVIDAD = [
-        { tipo: "creado",     texto: "Requerimiento creado",            codigo: "REQ-0008", hace: 1  },
-        { tipo: "enviado",    texto: "Requerimiento enviado",           codigo: "REQ-0010", hace: 4  },
-        { tipo: "documento",  texto: "Documento actualizado",           codigo: "REQ-0003", hace: 9  },
-        { tipo: "logistica",  texto: "Logística recibió el expediente", codigo: "REQ-0002", hace: 22 },
-        { tipo: "observado",  texto: "Requerimiento observado",         codigo: "REQ-0007", hace: 30 }
-    ];
-
-    // Notificaciones recientes. `hace` en horas.
-    const NOTIFICACIONES = [
-        { texto: "Material urgente pendiente de gestión", codigo: "REQ-0001", hace: 2  },
-        { texto: "Se solicitó una corrección",            codigo: "REQ-0009", hace: 6  },
-        { texto: "Documento observado por Logística",     codigo: "REQ-0003", hace: 12 },
-        { texto: "Expediente próximo a vencer",           codigo: "REQ-0010", hace: 20 }
-    ];
-
     // --- Utilidades de fecha (sin librerías externas) ---
 
     function hoyCero() {
         const d = new Date();
         d.setHours(0, 0, 0, 0);
         return d;
-    }
-
-    function fechaDesdeOffset(dias) {
-        const d = hoyCero();
-        d.setDate(d.getDate() + dias);
-        return d;
-    }
-
-    function diasRestantes(offset) {
-        return offset;
     }
 
     // --- Consultas (solo lectura) ---
@@ -852,16 +807,11 @@ const ExpedienteDigital = (function () {
         }
     }
 
-    // Devuelve los expedientes (creados + muestra) con fecha calculada.
+    // Devuelve los expedientes reales del repositorio con fecha
+    // calculada. Única fuente de verdad: RequerimientosDB (sin datos
+    // de muestra).
     function listar() {
-        const muestra = FUENTE.map((e) => ({
-            ...e,
-            fechaLimite: fechaDesdeOffset(e.limite),
-            fechaCreado: fechaDesdeOffset(e.creado),
-            diasParaVencer: diasRestantes(e.limite)
-        }));
-
-        return expedientesCreados().concat(muestra);
+        return expedientesCreados();
     }
 
     function buscarPorCodigo(codigo) {
@@ -955,7 +905,7 @@ const ExpedienteDigital = (function () {
         } catch (error) {
             creada = [];
         }
-        return creada.concat(ACTIVIDAD).slice(0, 8);
+        return creada.slice(0, 8);
     }
 
     function obtenerNotificaciones() {
@@ -967,7 +917,7 @@ const ExpedienteDigital = (function () {
         } catch (error) {
             creadas = [];
         }
-        return creadas.concat(NOTIFICACIONES).slice(0, 8);
+        return creadas.slice(0, 8);
     }
 
     return {
@@ -3689,6 +3639,502 @@ const Documentos = (function () {
     return { render, montar, refrescar, abrirVisor };
 })();
 
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "BANDEJA DE TRABAJO"
+   ----------------------------------------------------------
+   Centro Operativo del Residente. Administra los requerimientos
+   ACTIVOS (aún no enviados a Logística). NO crea requerimientos,
+   NO genera / imprime / exporta documentos, NO almacena datos:
+   solo lista, filtra y deriva a los submódulos existentes.
+
+   Reutiliza por completo la arquitectura actual (nada paralelo):
+     · Datos      -> RequerimientosDB.listarExpedientes()
+                     (mismo origen que Documentos) + Configuración
+                     General para el nombre de empresa.
+     · Título     -> DocumentGenerator.tituloInteligente(exp).
+     · Estados    -> ExpedienteDigital.ESTADOS.
+     · Acciones   -> Documentos.abrirVisor(codigo) y
+                     ReqWorkspace.irATab / abrirExpediente.
+     · Estilos    -> tokens --dash-*, .pc-tag-* y patrón .zdoc-*.
+
+   Cada FILA representa UN requerimiento (nunca un documento, un
+   material ni una partida). Al enviarse a Logística desde
+   Documentos, deja de ser activo y desaparece de esta bandeja,
+   apareciendo en Archivo. No duplica registros ni consultas.
+   ========================================================== */
+
+const BandejaTrabajo = (function () {
+
+    // Estado de INTERFAZ (no es información de negocio): filtros
+    // vigentes y código sobre el que opera el menú contextual.
+    const estado = {
+        filtros: { buscar: "", empresa: "", obra: "", estado: "", prioridad: "", fecha: "", orden: "recientes" },
+        codigoMenu: null
+    };
+
+    let handlersGlobales = false;
+
+    const PESO_PRIORIDAD = { Urgente: 4, Alta: 3, Media: 2, Baja: 1 };
+    const PRIORIDADES = ["Urgente", "Alta", "Media", "Baja"];
+
+    /* ---------- Utilidades de presentación (reutilizan PanelUtils) ---------- */
+
+    function esc(t) {
+        return PanelUtils.escapar(t == null ? "" : t);
+    }
+
+    // Nombre de empresa EN VIVO desde Configuración General (SSOT);
+    // degrada al dato guardado en el expediente si ya no existe.
+    function empresaDe(exp) {
+        if (exp.empresaId && typeof ConfiguracionDB !== "undefined") {
+            const c = ConfiguracionDB.contextoEmpresa(exp.empresaId);
+            if (c && c.nombre) return c.nombre;
+        }
+        return exp.empresa || "—";
+    }
+
+    function fechaISO(iso) {
+        if (!iso) return null;
+        const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + "T00:00:00" : iso);
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    function fechaCorta(iso) {
+        const d = fechaISO(iso);
+        return d ? PanelUtils.fecha(d) : "—";
+    }
+
+    function fechaMs(ms) {
+        if (!ms) return "—";
+        const d = new Date(ms);
+        return isNaN(d.getTime()) ? "—" : PanelUtils.fecha(d);
+    }
+
+    function estadoLabel(clave) {
+        return (ExpedienteDigital.ESTADOS && ExpedienteDigital.ESTADOS[clave]) || clave || "—";
+    }
+
+    function esGenerado(exp) {
+        return !!exp.estado && exp.estado !== "borrador";
+    }
+
+    /* ---------- ORIGEN DE DATOS (una sola consulta, sin duplicar) ---------- */
+
+    // Requerimientos ACTIVOS = expedientes aún no enviados a Logística.
+    // Al marcarse enviadoLogistica pasan a Archivo (misma colección).
+    function baseActivos() {
+        return RequerimientosDB.listarExpedientes().filter((e) => !e.enviadoLogistica);
+    }
+
+    // Aplica todos los filtros a la vez sobre el conjunto activo.
+    function aplicar(lista, f) {
+        const q = (f.buscar || "").trim().toLowerCase();
+
+        return lista.filter((exp) => {
+            if (f.estado && exp.estado !== f.estado) return false;
+            if (f.prioridad && (exp.prioridad || "") !== f.prioridad) return false;
+            if (f.empresa && empresaDe(exp) !== f.empresa) return false;
+            if (f.obra && (exp.obra || "") !== f.obra) return false;
+
+            if (f.fecha) {
+                const d = fechaISO(exp.fecha) || (exp.creadoEn ? new Date(exp.creadoEn) : null);
+                const iso = d ? d.toISOString().slice(0, 10) : "";
+                if (iso !== f.fecha) return false;
+            }
+
+            if (q) {
+                const heno = [
+                    exp.codigo,
+                    DocumentGenerator.tituloInteligente(exp),
+                    exp.obra,
+                    empresaDe(exp),
+                    exp.requeridoPor
+                ].join(" ").toLowerCase();
+                if (!heno.includes(q)) return false;
+            }
+
+            return true;
+        });
+    }
+
+    function ordenar(lista, orden) {
+        const arr = lista.slice();
+        const t = (e) => e.actualizadoEn || e.creadoEn || 0;
+
+        if (orden === "antiguos") {
+            arr.sort((a, b) => t(a) - t(b));
+        } else if (orden === "prioridad") {
+            arr.sort((a, b) => (PESO_PRIORIDAD[b.prioridad] || 0) - (PESO_PRIORIDAD[a.prioridad] || 0) || t(b) - t(a));
+        } else if (orden === "codigo") {
+            arr.sort((a, b) => String(a.codigo).localeCompare(String(b.codigo)));
+        } else {
+            arr.sort((a, b) => t(b) - t(a)); // recientes (por defecto)
+        }
+        return arr;
+    }
+
+    // Valores únicos para poblar los selectores (derivados del conjunto
+    // activo real; nunca inventados).
+    function valoresUnicos(lista, fn) {
+        const set = new Set();
+        lista.forEach((e) => { const v = fn(e); if (v) set.add(v); });
+        return [...set].sort((a, b) => a.localeCompare(b));
+    }
+
+    /* ---------- RENDER: BARRA DE HERRAMIENTAS + BANDEJA ---------- */
+
+    function opciones(valores, seleccionado) {
+        return valores.map((v) =>
+            `<option value="${esc(v)}"${v === seleccionado ? " selected" : ""}>${esc(v)}</option>`
+        ).join("");
+    }
+
+    function toolbarHTML(activos) {
+        const f = estado.filtros;
+        const empresas = valoresUnicos(activos, empresaDe);
+        const obras = valoresUnicos(activos, (e) => e.obra);
+        const estados = Object.keys(ExpedienteDigital.ESTADOS || {});
+
+        const optsEstado = estados.map((k) =>
+            `<option value="${esc(k)}"${k === f.estado ? " selected" : ""}>${esc(estadoLabel(k))}</option>`
+        ).join("");
+
+        return `
+            <div class="bt-toolbar">
+                <div class="bt-search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+                    <input type="search" class="bt-search-input" id="bt-buscar" placeholder="Buscar requerimiento…" value="${esc(f.buscar)}" autocomplete="off">
+                </div>
+
+                <select class="bt-select" id="bt-empresa" aria-label="Empresa">
+                    <option value="">Empresa</option>${opciones(empresas, f.empresa)}
+                </select>
+
+                <select class="bt-select" id="bt-obra" aria-label="Obra">
+                    <option value="">Obra</option>${opciones(obras, f.obra)}
+                </select>
+
+                <select class="bt-select" id="bt-estado" aria-label="Estado">
+                    <option value="">Estado</option>${optsEstado}
+                </select>
+
+                <select class="bt-select" id="bt-prioridad" aria-label="Prioridad">
+                    <option value="">Prioridad</option>${opciones(PRIORIDADES, f.prioridad)}
+                </select>
+
+                <input type="date" class="bt-select bt-date" id="bt-fecha" aria-label="Fecha" value="${esc(f.fecha)}">
+
+                <select class="bt-select" id="bt-orden" aria-label="Ordenar">
+                    <option value="recientes"${f.orden === "recientes" ? " selected" : ""}>Más recientes</option>
+                    <option value="antiguos"${f.orden === "antiguos" ? " selected" : ""}>Más antiguos</option>
+                    <option value="prioridad"${f.orden === "prioridad" ? " selected" : ""}>Prioridad</option>
+                    <option value="codigo"${f.orden === "codigo" ? " selected" : ""}>N° Requerimiento</option>
+                </select>
+
+                <button type="button" class="bt-refresh" data-bt="refrescar" title="Actualizar" aria-label="Actualizar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.6 4"/><path d="M20 5v6h-6"/></svg>
+                    <span>Actualizar</span>
+                </button>
+            </div>`;
+    }
+
+    function filaHTML(exp) {
+        const estadoTxt = estadoLabel(exp.estado);
+        const prio = exp.prioridad || "Media";
+        const fCreado = fechaCorta(exp.fecha) !== "—" ? fechaCorta(exp.fecha) : fechaMs(exp.creadoEn);
+
+        return `
+            <tr class="zdoc-bj-row bt-row" data-codigo="${esc(exp.codigo)}" tabindex="0">
+                <td data-label="Estado"><span class="pc-tag pc-tag-state is-${esc(exp.estado || "borrador")}">${esc(estadoTxt)}</span></td>
+                <td class="zdoc-bj-cod" data-label="N° Requerimiento">${esc(exp.codigo)}</td>
+                <td class="zdoc-bj-tit" data-label="Título">${esc(DocumentGenerator.tituloInteligente(exp))}</td>
+                <td data-label="Empresa">${esc(empresaDe(exp))}</td>
+                <td data-label="Obra">${esc(exp.obra || "—")}</td>
+                <td data-label="Responsable">${esc(exp.requeridoPor || "—")}</td>
+                <td class="zdoc-bj-fecha" data-label="Creación">${esc(fCreado)}</td>
+                <td class="zdoc-bj-fecha" data-label="Actualización">${esc(fechaMs(exp.actualizadoEn))}</td>
+                <td data-label="Prioridad"><span class="pc-tag pc-tag-prio is-${esc(prio.toLowerCase())}">${esc(prio)}</span></td>
+                <td class="zdoc-bj-acc">
+                    <button class="zdoc-kebab" type="button" data-bt-kebab="${esc(exp.codigo)}" aria-label="Acciones del requerimiento">⋮</button>
+                </td>
+            </tr>`;
+    }
+
+    function vacioHTML(hayActivos) {
+        const texto = hayActivos
+            ? "Ningún requerimiento coincide con los filtros aplicados."
+            : "No hay requerimientos activos. Crea uno desde «Nuevo Requerimiento» para administrarlo aquí.";
+        return `
+            <div class="zdoc-vacio">
+                <div class="zdoc-vacio-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+                </div>
+                <p class="zdoc-vacio-text">${texto}</p>
+            </div>`;
+    }
+
+    function listaHTML(activos) {
+        const filtrados = ordenar(aplicar(activos, estado.filtros), estado.filtros.orden);
+
+        if (filtrados.length === 0) {
+            return `<div class="bt-count">0 requerimientos</div>${vacioHTML(activos.length > 0)}`;
+        }
+
+        const conteo = filtrados.length === 1
+            ? "1 requerimiento activo"
+            : `${filtrados.length} requerimientos activos`;
+
+        return `
+            <div class="bt-count">${conteo}</div>
+            <div class="zdoc-bj-wrap zv-no-scrollbar">
+                <table class="zdoc-bj bt-table">
+                    <thead>
+                        <tr>
+                            <th>Estado</th>
+                            <th>N° Requerimiento</th>
+                            <th>Título</th>
+                            <th>Empresa</th>
+                            <th>Obra</th>
+                            <th>Responsable</th>
+                            <th>Creación</th>
+                            <th>Actualización</th>
+                            <th>Prioridad</th>
+                            <th class="zdoc-bj-acc"></th>
+                        </tr>
+                    </thead>
+                    <tbody>${filtrados.map(filaHTML).join("")}</tbody>
+                </table>
+            </div>`;
+    }
+
+    // Interpreta el filtro recibido del Panel de Control ({campo,valor})
+    // SIN volver a solicitarlo ni recalcular nada: solo lo traduce.
+    function aplicarFiltroEntrante(params) {
+        estado.filtros = { buscar: "", empresa: "", obra: "", estado: "", prioridad: "", fecha: "", orden: "recientes" };
+        if (!params) return;
+
+        const valor = params.valor;
+        if (!valor || valor === "todos") return;
+
+        if (params.campo === "estado") {
+            estado.filtros.estado = valor;
+        } else if (params.campo === "prioridad") {
+            estado.filtros.prioridad = valor;
+        }
+    }
+
+    function render(params) {
+        aplicarFiltroEntrante(params);
+        const activos = baseActivos();
+
+        return `
+            <section class="bt">
+                <header class="bt-head">
+                    <h2 class="bt-title">Bandeja de Trabajo</h2>
+                    <p class="bt-sub">Centro operativo del residente. Administra los requerimientos activos.</p>
+                </header>
+                ${toolbarHTML(activos)}
+                <div class="bt-list" id="bt-list">${listaHTML(activos)}</div>
+            </section>`;
+    }
+
+    /* ---------- REPINTADO QUIRÚRGICO (solo la lista visible) ---------- */
+
+    // Lee los filtros vigentes desde la barra y repinta ÚNICAMENTE la
+    // lista (no recarga la app ni reconstruye la barra: no se pierde el
+    // foco ni el estado de los selectores).
+    function leerFiltros() {
+        const val = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
+        estado.filtros = {
+            buscar:    val("bt-buscar"),
+            empresa:   val("bt-empresa"),
+            obra:      val("bt-obra"),
+            estado:    val("bt-estado"),
+            prioridad: val("bt-prioridad"),
+            fecha:     val("bt-fecha"),
+            orden:     val("bt-orden") || "recientes"
+        };
+    }
+
+    function repintarLista() {
+        const cont = document.getElementById("bt-list");
+        if (!cont) return;
+        leerFiltros();
+        cont.innerHTML = listaHTML(baseActivos());
+    }
+
+    /* ---------- MENÚ CONTEXTUAL (⋮ y clic en fila) ---------- */
+
+    function menuNode() {
+        let m = document.getElementById("bt-menu");
+        if (m) return m;
+
+        m = document.createElement("div");
+        m.id = "bt-menu";
+        m.className = "zdoc-menu bt-menu";
+        m.hidden = true;
+        m.innerHTML = `
+            <button type="button" class="zdoc-menu-item" data-bt-act="abrir">Abrir requerimiento</button>
+            <button type="button" class="zdoc-menu-item" data-bt-act="expediente">Ver expediente</button>
+            <button type="button" class="zdoc-menu-item" data-bt-act="documento">Abrir documento</button>
+            <button type="button" class="zdoc-menu-item" data-bt-act="seguimiento">Ver seguimiento</button>`;
+
+        document.body.appendChild(m);
+        m.addEventListener("click", onMenuClick);
+        return m;
+    }
+
+    function cerrarMenu() {
+        const m = document.getElementById("bt-menu");
+        if (m && !m.hidden) m.hidden = true;
+        estado.codigoMenu = null;
+    }
+
+    // Coloca el menú respecto de un rectángulo (kebab o fila), sin
+    // salirse de la ventana. Reutiliza la estética .zdoc-menu.
+    function abrirMenu(rect, codigo) {
+        const exp = RequerimientosDB.expedientePorCodigo(codigo);
+        if (!exp) { toast("No se encontró el requerimiento.", "error"); return; }
+
+        const m = menuNode();
+        estado.codigoMenu = codigo;
+
+        // «Abrir documento» solo aplica a requerimientos ya generados
+        // (un borrador todavía no tiene documento oficial).
+        m.querySelector('[data-bt-act="documento"]').hidden = !esGenerado(exp);
+
+        m.hidden = false;
+
+        const mw = m.offsetWidth;
+        const mh = m.offsetHeight;
+
+        let left = rect.right - mw;
+        if (left < 8) left = 8;
+        if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+
+        let top = rect.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = rect.top - mh - 6;
+        if (top < 8) top = 8;
+
+        m.style.left = left + "px";
+        m.style.top = top + "px";
+    }
+
+    function onMenuClick(evento) {
+        const item = evento.target.closest(".zdoc-menu-item");
+        if (!item) return;
+        const codigo = estado.codigoMenu;
+        cerrarMenu();
+        if (codigo) ejecutar(item.dataset.btAct, codigo);
+    }
+
+    /* ---------- DESPACHADOR ÚNICO DE ACCIONES ----------
+       Fila (Opción A) y menú ⋮ (Opción B) comparten EXACTAMENTE este
+       mismo despachador. Respeta el estado real del requerimiento. */
+
+    function abrirSeguimiento(codigo) {
+        // Reutiliza el router interno existente (centro del expediente).
+        ReqWorkspace.irATab("seguimiento", { codigo });
+    }
+
+    function ejecutar(accion, codigo) {
+        const exp = RequerimientosDB.expedientePorCodigo(codigo);
+        if (!exp) { toast("No se encontró el requerimiento.", "error"); return; }
+        const generado = esGenerado(exp);
+
+        if (accion === "abrir") {
+            if (generado) Documentos.abrirVisor(codigo);
+            else abrirSeguimiento(codigo);
+        } else if (accion === "documento") {
+            if (generado) Documentos.abrirVisor(codigo);
+            else toast("Es un borrador: aún no tiene documento oficial.", "error");
+        } else if (accion === "expediente" || accion === "seguimiento") {
+            abrirSeguimiento(codigo);
+        }
+    }
+
+    /* ---------- TOAST (reutiliza la estética .zdoc-toast) ---------- */
+
+    function toast(mensaje, tipo) {
+        let t = document.getElementById("bt-toast");
+        if (!t) {
+            t = document.createElement("div");
+            t.id = "bt-toast";
+            t.className = "zdoc-toast";
+            document.body.appendChild(t);
+        }
+        t.className = `zdoc-toast is-${tipo === "error" ? "error" : "ok"} is-visible`;
+        t.textContent = mensaje;
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => { t.classList.remove("is-visible"); }, 3200);
+    }
+
+    /* ---------- MONTAJE / WIRING ---------- */
+
+    function asegurarHandlersGlobales() {
+        if (handlersGlobales) return;
+        handlersGlobales = true;
+
+        document.addEventListener("mousedown", (e) => {
+            const m = document.getElementById("bt-menu");
+            if (!m || m.hidden) return;
+            if (e.target.closest("#bt-menu") || e.target.closest("[data-bt-kebab]") || e.target.closest(".bt-row")) return;
+            cerrarMenu();
+        });
+
+        window.addEventListener("resize", cerrarMenu);
+        document.addEventListener("scroll", cerrarMenu, true);
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrarMenu(); });
+    }
+
+    function montar(ws) {
+        asegurarHandlersGlobales();
+
+        // Barra de herramientas: repintado quirúrgico de la lista.
+        ["bt-buscar", "bt-empresa", "bt-obra", "bt-estado", "bt-prioridad", "bt-fecha", "bt-orden"].forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const evt = (id === "bt-buscar") ? "input" : "change";
+            el.addEventListener(evt, repintarLista);
+        });
+
+        // Delegación única para acciones (fila, kebab y botón Actualizar).
+        // El contenedor de la Bandeja se reconstruye en cada render, por
+        // lo que enlazar aquí no acumula listeners.
+        const raiz = ws.querySelector(".bt");
+        if (raiz && !raiz.dataset.btReady) {
+            raiz.dataset.btReady = "true";
+
+            raiz.addEventListener("click", (evento) => {
+                if (evento.target.closest('[data-bt="refrescar"]')) { repintarLista(); return; }
+
+                const kebab = evento.target.closest("[data-bt-kebab]");
+                if (kebab) {
+                    evento.stopPropagation();
+                    abrirMenu(kebab.getBoundingClientRect(), kebab.dataset.btKebab);
+                    return;
+                }
+
+                // Clic en la fila (Opción A): abre el MISMO menú de acciones.
+                const fila = evento.target.closest(".bt-row");
+                if (fila) {
+                    evento.stopPropagation();
+                    abrirMenu(fila.getBoundingClientRect(), fila.dataset.codigo);
+                }
+            });
+
+            // Accesibilidad: Enter sobre una fila abre las acciones.
+            raiz.addEventListener("keydown", (evento) => {
+                if (evento.key !== "Enter") return;
+                const fila = evento.target.closest(".bt-row");
+                if (fila) { evento.preventDefault(); abrirMenu(fila.getBoundingClientRect(), fila.dataset.codigo); }
+            });
+        }
+    }
+
+    return { render, montar };
+})();
+
 const ReqWorkspace = (function () {
 
     function contenedor() {
@@ -3733,6 +4179,9 @@ const ReqWorkspace = (function () {
 
         if (claveTab === "panel-control") {
             ws.innerHTML = PanelControl.render();
+        } else if (claveTab === "bandeja-trabajo") {
+            ws.innerHTML = BandejaTrabajo.render(params);
+            BandejaTrabajo.montar(ws);
         } else if (claveTab === "nuevo-requerimiento") {
             ws.innerHTML = NuevoRequerimiento.render();
             NuevoRequerimiento.montar(ws);
