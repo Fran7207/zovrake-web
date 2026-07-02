@@ -5083,3 +5083,215 @@ body.zviewer-open{
         max-width: none;
     }
 }
+
+/* ==========================================================
+   SUBMÓDULO SEGUIMIENTO — CENTRO DE TRAZABILIDAD
+   ----------------------------------------------------------
+   Solo lectura. Reutiliza por completo el lenguaje visual del
+   ERP (tokens --dash y --pc, componentes .bt, .pc y .zdoc).
+   Aquí solo se añade lo mínimo propio: rejilla de
+   identificación y listado de resultados de la consulta.
+   ========================================================== */
+
+.sg{
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.sg-head{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sg-title{
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--dash-text);
+}
+
+.sg-sub{
+    font-size: 13px;
+    color: var(--dash-text-soft);
+}
+
+/* ---------- 1. Centro de consulta ---------- */
+
+.sg-consulta{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.sg-resultados.is-hidden{
+    display: none;
+}
+
+/* Filas de resultados: mismo tacto que la bandeja, con manejador
+   propio (no interfiere con el visor de Documentos). */
+.sg-res-row{
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.sg-res-row:hover{
+    background: var(--dash-hover);
+}
+
+.sg-res-table .zdoc-bj-tit{
+    min-width: 220px;
+    max-width: 360px;
+    font-weight: 500;
+}
+
+/* ---------- Detalle / traza ---------- */
+
+.sg-detalle{
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.sg-card{
+    padding: 18px;
+}
+
+.sg-hint{
+    text-align: center;
+}
+
+.sg-muted{
+    color: var(--dash-text-soft);
+}
+
+.sg-note{
+    font-size: 13.5px;
+    color: var(--dash-text-soft);
+    line-height: 1.5;
+}
+
+/* ---------- 2. Identificación del requerimiento ---------- */
+
+.sg-id-grid{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px 20px;
+}
+
+.sg-id-field{
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.sg-id-wide{
+    grid-column: span 2;
+}
+
+.sg-id-label{
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--dash-text-soft);
+}
+
+.sg-id-value{
+    font-size: 14px;
+    color: var(--dash-text);
+    word-break: break-word;
+}
+
+.sg-cod{
+    font-weight: 700;
+    color: var(--dash-accent);
+}
+
+/* ---------- 3. Cronología ---------- */
+
+.sg-card-main{
+    border-color: var(--dash-accent);
+}
+
+.sg-timeline{
+    margin-top: 2px;
+}
+
+/* ---------- 4-7. Tablas de traza (patrón .zdoc-bj) ---------- */
+
+.sg-table{
+    min-width: 520px;
+}
+
+.sg-obs-text{
+    white-space: normal;
+    min-width: 220px;
+}
+
+/* ---------- 8-9. Expediente / acciones ---------- */
+
+.sg-exp{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.sg-acciones .pc-actions{
+    flex-wrap: wrap;
+}
+
+/* ==========================================================
+   RESPONSIVE — SEGUIMIENTO
+   ----------------------------------------------------------
+   Mantiene la misma arquitectura: en pantallas medianas la
+   rejilla de identificación se comprime; en móvil apila. Las
+   tablas conservan desplazamiento horizontal (patrón .zdoc-bj)
+   para no ocultar información.
+   ========================================================== */
+
+@media (max-width: 992px){
+
+    .sg-id-grid{
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .sg-id-wide{
+        grid-column: span 2;
+    }
+}
+
+@media (max-width: 640px){
+
+    .sg-id-grid{
+        grid-template-columns: 1fr;
+    }
+
+    .sg-id-wide{
+        grid-column: auto;
+    }
+
+    /* El listado de resultados y las tablas de traza adoptan el
+       patrón tarjeta heredado de .zdoc-bj (etiquetas por celda con
+       data-label); se libera el ancho mínimo para no forzar scroll. */
+    .sg-res-table,
+    .sg-table{
+        min-width: 0;
+    }
+
+    /* Separadores de tarjeta para filas sin la clase .zdoc-bj-row. */
+    .sg-res-row,
+    .sg-table tbody tr{
+        display: block;
+        width: 100%;
+        position: relative;
+        padding: 8px 4px;
+        border-bottom: 1px solid var(--dash-border);
+    }
+
+    .sg-obs-text{
+        min-width: 0;
+        text-align: right;
+    }
+}

@@ -4135,6 +4135,785 @@ const BandejaTrabajo = (function () {
     return { render, montar };
 })();
 
+/* ==========================================================
+   MÓDULO REQUERIMIENTOS — SUBMÓDULO "SEGUIMIENTO"
+   ----------------------------------------------------------
+   Centro de Trazabilidad del Requerimiento. Muestra el
+   recorrido completo de UN requerimiento. Es un submódulo de
+   SOLO LECTURA: no crea, no edita, no cambia estados, no
+   genera / imprime / exporta / almacena documentos. Reutiliza
+   por completo la arquitectura vigente (nada paralelo):
+
+     · Datos      -> RequerimientosDB (expedientes, actividad,
+                     documentos). Única fuente de verdad.
+     · Empresa    -> ConfiguracionDB.contextoEmpresa (en vivo).
+     · Estados    -> ExpedienteDigital.ESTADOS.
+     · Título     -> DocumentGenerator.tituloInteligente(exp).
+     · Expediente -> Documentos.abrirVisor(codigo) (visor oficial).
+     · Router     -> ReqWorkspace.irATab (Bandeja / Archivo).
+     · Estilos    -> tokens --dash / --pc, .bt, .pc, .zdoc.
+
+   Auto-apertura: si llega {codigo} se abre ese requerimiento;
+   si se entra por la pestaña sin código, reabre el último
+   consultado (nunca vuelve a pedir el código).
+   ========================================================== */
+
+const Seguimiento = (function () {
+
+    // Estado de INTERFAZ (no es información de negocio): código en
+    // consulta (persiste entre navegaciones) y filtros del Centro de
+    // Consulta. El módulo vive durante toda la sesión, por lo que
+    // `estado.codigo` recuerda el último requerimiento abierto.
+    const estado = {
+        codigo: null,
+        filtros: { buscar: "", estado: "", responsable: "", fecha: "" }
+    };
+
+    let handlersGlobales = false;
+
+    // Transiciones de estado REALES que quedan registradas en la
+    // actividad del sistema. No se calculan ni se inventan estados:
+    // cada fila corresponde a un evento efectivamente ocurrido.
+    const ESTADO_POR_EVENTO = { creado: "borrador", enviado: "enviado", logistica: "cerrado" };
+    const ETIQUETA_EVENTO   = { creado: "Borrador", enviado: "Enviado", logistica: "Enviado a Logística" };
+
+    /* ---------- Utilidades de presentación (reutilizan PanelUtils) ---------- */
+
+    function esc(t) {
+        return PanelUtils.escapar(t == null ? "" : t);
+    }
+
+    function empresaDe(exp) {
+        if (exp.empresaId && typeof ConfiguracionDB !== "undefined") {
+            const c = ConfiguracionDB.contextoEmpresa(exp.empresaId);
+            if (c && c.nombre) return c.nombre;
+        }
+        return exp.empresa || "—";
+    }
+
+    function estadoLabel(clave) {
+        return (ExpedienteDigital.ESTADOS && ExpedienteDigital.ESTADOS[clave]) || clave || "—";
+    }
+
+    function esGenerado(exp) {
+        return !!exp.estado && exp.estado !== "borrador";
+    }
+
+    function fechaISO(iso) {
+        if (!iso) return null;
+        const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + "T00:00:00" : iso);
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    function fechaCorta(iso) {
+        const d = fechaISO(iso);
+        return d ? PanelUtils.fecha(d) : "—";
+    }
+
+    function fechaMs(ms) {
+        if (!ms) return "—";
+        const d = new Date(ms);
+        return isNaN(d.getTime()) ? "—" : PanelUtils.fecha(d);
+    }
+
+    function horaMs(ms) {
+        if (!ms) return "—";
+        const d = new Date(ms);
+        if (isNaN(d.getTime())) return "—";
+        return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    }
+
+    // Fecha de creación priorizando la fecha del documento (exp.fecha)
+    // y degradando a la marca de creación real (creadoEn).
+    function fechaCreacion(exp) {
+        const f = fechaCorta(exp.fecha);
+        return f !== "—" ? f : fechaMs(exp.creadoEn);
+    }
+
+    function tipoDocLabel(tipo) {
+        if (tipo === "word") return "Word";
+        if (tipo === "excel") return "Excel";
+        if (tipo === "pdf") return "PDF";
+        return (tipo || "—").toUpperCase();
+    }
+
+    /* ---------- ORIGEN DE DATOS (solo lectura, sin duplicar) ---------- */
+
+    function expediente(codigo) {
+        return RequerimientosDB.expedientePorCodigo(codigo);
+    }
+
+    function baseTodos() {
+        return RequerimientosDB.listarExpedientes();
+    }
+
+    // Eventos reales del requerimiento, en orden cronológico ascendente.
+    function eventosDe(codigo) {
+        let lista = [];
+        try {
+            lista = RequerimientosDB.listarActividad().filter((a) => a.codigo === codigo);
+        } catch (error) {
+            lista = [];
+        }
+        return lista.slice().sort((a, b) => (a.en || 0) - (b.en || 0));
+    }
+
+    // Documentos reales generados para el requerimiento.
+    function documentosDe(codigo) {
+        let lista = [];
+        try {
+            lista = RequerimientosDB.listarDocumentos().filter((d) => d.codigo === codigo);
+        } catch (error) {
+            lista = [];
+        }
+        return lista.slice().sort((a, b) => (a.generadoEn || 0) - (b.generadoEn || 0));
+    }
+
+    function materialesReales(exp) {
+        return (exp.materiales || []).filter((m) => (m.descripcion || "").trim() !== "");
+    }
+
+    /* ---------- CENTRO DE CONSULTA (búsqueda / filtros) ---------- */
+
+    function valoresUnicos(lista, fn) {
+        const set = new Set();
+        lista.forEach((e) => { const v = fn(e); if (v) set.add(v); });
+        return [...set].sort((a, b) => a.localeCompare(b));
+    }
+
+    function opciones(valores, seleccionado) {
+        return valores.map((v) =>
+            `<option value="${esc(v)}"${v === seleccionado ? " selected" : ""}>${esc(v)}</option>`
+        ).join("");
+    }
+
+    function aplicarFiltros(lista, f) {
+        const q = (f.buscar || "").trim().toLowerCase();
+        return lista.filter((exp) => {
+            if (f.estado && exp.estado !== f.estado) return false;
+            if (f.responsable && (exp.requeridoPor || "") !== f.responsable) return false;
+            if (f.fecha) {
+                const d = fechaISO(exp.fecha) || (exp.creadoEn ? new Date(exp.creadoEn) : null);
+                const iso = d ? d.toISOString().slice(0, 10) : "";
+                if (iso !== f.fecha) return false;
+            }
+            if (q) {
+                const heno = [
+                    exp.codigo,
+                    DocumentGenerator.tituloInteligente(exp),
+                    exp.obra,
+                    empresaDe(exp),
+                    exp.requeridoPor
+                ].join(" ").toLowerCase();
+                if (!heno.includes(q)) return false;
+            }
+            return true;
+        });
+    }
+
+    function hayFiltroActivo(f) {
+        return !!(f.buscar || f.estado || f.responsable || f.fecha);
+    }
+
+    function toolbarHTML() {
+        const todos = baseTodos();
+        const responsables = valoresUnicos(todos, (e) => e.requeridoPor);
+        const estados = Object.keys(ExpedienteDigital.ESTADOS || {});
+        const f = estado.filtros;
+
+        const optsEstado = estados.map((k) =>
+            `<option value="${esc(k)}"${k === f.estado ? " selected" : ""}>${esc(estadoLabel(k))}</option>`
+        ).join("");
+
+        return `
+            <div class="bt-toolbar sg-toolbar">
+                <div class="bt-search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+                    <input type="search" class="bt-search-input" id="sg-buscar" placeholder="Buscar requerimiento…" value="${esc(f.buscar)}" autocomplete="off">
+                </div>
+
+                <select class="bt-select" id="sg-estado" aria-label="Estado">
+                    <option value="">Estado</option>${optsEstado}
+                </select>
+
+                <select class="bt-select" id="sg-responsable" aria-label="Responsable">
+                    <option value="">Responsable</option>${opciones(responsables, f.responsable)}
+                </select>
+
+                <input type="date" class="bt-select bt-date" id="sg-fecha" aria-label="Fecha" value="${esc(f.fecha)}">
+
+                <button type="button" class="bt-refresh" data-sg="refrescar" title="Actualizar" aria-label="Actualizar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.6 4"/><path d="M20 5v6h-6"/></svg>
+                    <span>Actualizar</span>
+                </button>
+            </div>`;
+    }
+
+    function resultadoFilaHTML(exp) {
+        const prio = exp.prioridad || "Media";
+        return `
+            <tr class="sg-res-row" data-sg-codigo="${esc(exp.codigo)}" tabindex="0">
+                <td class="zdoc-bj-cod" data-label="N° Requerimiento">${esc(exp.codigo)}</td>
+                <td class="zdoc-bj-tit" data-label="Título">${esc(DocumentGenerator.tituloInteligente(exp))}</td>
+                <td data-label="Empresa">${esc(empresaDe(exp))}</td>
+                <td data-label="Obra">${esc(exp.obra || "—")}</td>
+                <td data-label="Responsable">${esc(exp.requeridoPor || "—")}</td>
+                <td data-label="Estado"><span class="pc-tag pc-tag-state is-${esc(exp.estado || "borrador")}">${esc(estadoLabel(exp.estado))}</span></td>
+                <td data-label="Prioridad"><span class="pc-tag pc-tag-prio is-${esc(prio.toLowerCase())}">${esc(prio)}</span></td>
+                <td class="zdoc-bj-fecha" data-label="Fecha">${esc(fechaCreacion(exp))}</td>
+            </tr>`;
+    }
+
+    function resultadosHTML() {
+        const lista = aplicarFiltros(baseTodos(), estado.filtros);
+
+        if (lista.length === 0) {
+            const hayDatos = baseTodos().length > 0;
+            const texto = hayDatos
+                ? "Ningún requerimiento coincide con la consulta."
+                : "Aún no hay requerimientos. Crea uno desde «Nuevo Requerimiento» para consultar su trazabilidad.";
+            return `
+                <div class="zdoc-vacio">
+                    <div class="zdoc-vacio-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+                    </div>
+                    <p class="zdoc-vacio-text">${texto}</p>
+                </div>`;
+        }
+
+        return `
+            <div class="zdoc-bj-wrap zv-no-scrollbar">
+                <table class="zdoc-bj sg-res-table">
+                    <thead>
+                        <tr>
+                            <th>N° Requerimiento</th>
+                            <th>Título</th>
+                            <th>Empresa</th>
+                            <th>Obra</th>
+                            <th>Responsable</th>
+                            <th>Estado</th>
+                            <th>Prioridad</th>
+                            <th>Fecha</th>
+                        </tr>
+                    </thead>
+                    <tbody>${lista.map(resultadoFilaHTML).join("")}</tbody>
+                </table>
+            </div>`;
+    }
+
+    /* ---------- 2. IDENTIFICACIÓN DEL REQUERIMIENTO (solo lectura) ---------- */
+
+    function campoHTML(label, valor, extraClase) {
+        return `
+            <div class="sg-id-field${extraClase ? " " + extraClase : ""}">
+                <span class="sg-id-label">${label}</span>
+                <span class="sg-id-value">${valor}</span>
+            </div>`;
+    }
+
+    function identificacionHTML(exp) {
+        const prio = exp.prioridad || "Media";
+        return `
+            <article class="pc-card sg-card">
+                <p class="pc-card-title">Identificación del requerimiento</p>
+                <div class="sg-id-grid">
+                    ${campoHTML("Código", `<strong class="sg-cod">${esc(exp.codigo)}</strong>`)}
+                    ${campoHTML("Título inteligente", esc(DocumentGenerator.tituloInteligente(exp)), "sg-id-wide")}
+                    ${campoHTML("Empresa", esc(empresaDe(exp)))}
+                    ${campoHTML("Obra", esc(exp.obra || "—"))}
+                    ${campoHTML("Responsable actual", esc(exp.requeridoPor || "—"))}
+                    ${campoHTML("Prioridad", `<span class="pc-tag pc-tag-prio is-${esc(prio.toLowerCase())}">${esc(prio)}</span>`)}
+                    ${campoHTML("Estado actual", `<span class="pc-tag pc-tag-state is-${esc(exp.estado || "borrador")}">${esc(estadoLabel(exp.estado))}</span>`)}
+                    ${campoHTML("Fecha de creación", esc(fechaCreacion(exp)))}
+                    ${campoHTML("Última actualización", esc(fechaMs(exp.actualizadoEn)))}
+                </div>
+            </article>`;
+    }
+
+    /* ---------- 3. CRONOLOGÍA DEL REQUERIMIENTO ---------- */
+
+    function cronologiaHTML(exp) {
+        const eventos = eventosDe(exp.codigo);
+        const usuario = exp.requeridoPor || "—";
+
+        let cuerpo;
+        if (eventos.length === 0) {
+            cuerpo = `<div class="pc-empty">No hay eventos registrados para este requerimiento.</div>`;
+        } else {
+            const items = eventos.map((ev) => `
+                <li class="pc-tl-item is-${esc(ev.tipo || "creado")}">
+                    <span class="pc-tl-dot"></span>
+                    <span class="pc-tl-body">
+                        <span class="pc-tl-text">${esc(ev.texto || "Actividad")}</span>
+                        <span class="pc-tl-meta">${esc(fechaMs(ev.en))} · ${esc(horaMs(ev.en))} · ${esc(usuario)}</span>
+                    </span>
+                </li>
+            `).join("");
+            cuerpo = `<ul class="pc-timeline sg-timeline">${items}</ul>`;
+        }
+
+        return `
+            <article class="pc-card sg-card sg-card-main">
+                <p class="pc-card-title">Cronología del requerimiento</p>
+                ${cuerpo}
+            </article>`;
+    }
+
+    /* ---------- 4. EVOLUCIÓN DE ESTADOS (cambios reales) ---------- */
+
+    function estadosHTML(exp) {
+        const trans = eventosDe(exp.codigo).filter((e) => ESTADO_POR_EVENTO[e.tipo]);
+        const usuario = exp.requeridoPor || "—";
+
+        const filas = [];
+        let anterior = null;
+
+        if (trans.length) {
+            trans.forEach((ev) => {
+                const nuevo = ESTADO_POR_EVENTO[ev.tipo];
+                filas.push({ anterior, nuevo, etiqueta: ETIQUETA_EVENTO[ev.tipo], en: ev.en });
+                anterior = nuevo;
+            });
+        } else {
+            // Sin transiciones registradas: se muestra el estado real
+            // actual (no se calcula ni se inventa; es el dato vigente).
+            filas.push({
+                anterior: null,
+                nuevo: exp.estado || "borrador",
+                etiqueta: estadoLabel(exp.estado),
+                en: exp.actualizadoEn || exp.creadoEn
+            });
+        }
+
+        const cuerpo = filas.map((r) => {
+            const antHTML = r.anterior
+                ? `<span class="pc-tag pc-tag-state is-${esc(r.anterior)}">${esc(estadoLabel(r.anterior))}</span>`
+                : `<span class="sg-muted">—</span>`;
+            return `
+                <tr>
+                    <td data-label="Estado anterior">${antHTML}</td>
+                    <td data-label="Estado nuevo"><span class="pc-tag pc-tag-state is-${esc(r.nuevo)}">${esc(r.etiqueta)}</span></td>
+                    <td data-label="Usuario">${esc(usuario)}</td>
+                    <td class="zdoc-bj-fecha" data-label="Fecha">${esc(fechaMs(r.en))}</td>
+                    <td class="zdoc-bj-fecha" data-label="Hora">${esc(horaMs(r.en))}</td>
+                </tr>`;
+        }).join("");
+
+        return `
+            <article class="pc-card sg-card">
+                <p class="pc-card-title">Evolución de estados</p>
+                <div class="zdoc-bj-wrap zv-no-scrollbar">
+                    <table class="zdoc-bj sg-table">
+                        <thead>
+                            <tr>
+                                <th>Estado anterior</th>
+                                <th>Estado nuevo</th>
+                                <th>Usuario</th>
+                                <th>Fecha</th>
+                                <th>Hora</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cuerpo}</tbody>
+                    </table>
+                </div>
+            </article>`;
+    }
+
+    /* ---------- 5. REGISTRO DE OBSERVACIONES (solo lectura) ---------- */
+
+    function observacionesHTML(exp) {
+        const usuario = exp.requeridoPor || "—";
+        const cargo = exp.cargoRequerido || "—";
+
+        const registros = [];
+
+        // Observaciones generales del documento (pueden acumularse en
+        // varias líneas conforme se agregan materiales al documento).
+        (exp.observacionesGenerales || "")
+            .split(/\r?\n/)
+            .map((t) => t.trim())
+            .filter((t) => t !== "")
+            .forEach((texto) => {
+                registros.push({ usuario, cargo, en: exp.actualizadoEn || exp.creadoEn, texto });
+            });
+
+        // Observaciones asociadas a materiales concretos.
+        materialesReales(exp).forEach((m) => {
+            const obs = (m.observaciones || "").trim();
+            if (obs) {
+                registros.push({
+                    usuario, cargo, en: exp.creadoEn,
+                    texto: `${m.descripcion.trim()}: ${obs}`
+                });
+            }
+        });
+
+        if (registros.length === 0) {
+            return `
+                <article class="pc-card sg-card">
+                    <p class="pc-card-title">Registro de observaciones</p>
+                    <div class="pc-empty">No hay observaciones registradas para este requerimiento.</div>
+                </article>`;
+        }
+
+        const cuerpo = registros.map((r) => `
+            <tr>
+                <td data-label="Usuario">${esc(r.usuario)}</td>
+                <td data-label="Cargo">${esc(r.cargo)}</td>
+                <td class="zdoc-bj-fecha" data-label="Fecha">${esc(fechaMs(r.en))}</td>
+                <td class="zdoc-bj-fecha" data-label="Hora">${esc(horaMs(r.en))}</td>
+                <td class="sg-obs-text" data-label="Observación">${esc(r.texto)}</td>
+            </tr>
+        `).join("");
+
+        return `
+            <article class="pc-card sg-card">
+                <p class="pc-card-title">Registro de observaciones</p>
+                <div class="zdoc-bj-wrap zv-no-scrollbar">
+                    <table class="zdoc-bj sg-table">
+                        <thead>
+                            <tr>
+                                <th>Usuario</th>
+                                <th>Cargo</th>
+                                <th>Fecha</th>
+                                <th>Hora</th>
+                                <th>Observación</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cuerpo}</tbody>
+                    </table>
+                </div>
+            </article>`;
+    }
+
+    /* ---------- 6. HISTORIAL DOCUMENTAL (si existe) ---------- */
+
+    function documentalHTML(exp) {
+        const docs = documentosDe(exp.codigo);
+        if (docs.length === 0) return ""; // Sin documentos: no se muestra la sección.
+
+        const usuario = exp.requeridoPor || "—";
+        const versionPorTipo = {};
+
+        const cuerpo = docs.map((d) => {
+            versionPorTipo[d.tipo] = (versionPorTipo[d.tipo] || 0) + 1;
+            return `
+                <tr>
+                    <td class="zdoc-bj-cod" data-label="Nombre">${esc(d.nombre)}</td>
+                    <td data-label="Tipo">${esc(tipoDocLabel(d.tipo))}</td>
+                    <td data-label="Versión">v${versionPorTipo[d.tipo]}</td>
+                    <td class="zdoc-bj-fecha" data-label="Fecha">${esc(fechaMs(d.generadoEn))}</td>
+                    <td class="zdoc-bj-fecha" data-label="Hora">${esc(horaMs(d.generadoEn))}</td>
+                    <td data-label="Usuario">${esc(usuario)}</td>
+                </tr>`;
+        }).join("");
+
+        return `
+            <article class="pc-card sg-card">
+                <p class="pc-card-title">Historial documental</p>
+                <div class="zdoc-bj-wrap zv-no-scrollbar">
+                    <table class="zdoc-bj sg-table">
+                        <thead>
+                            <tr>
+                                <th>Nombre</th>
+                                <th>Tipo</th>
+                                <th>Versión</th>
+                                <th>Fecha</th>
+                                <th>Hora</th>
+                                <th>Usuario</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cuerpo}</tbody>
+                    </table>
+                </div>
+            </article>`;
+    }
+
+    /* ---------- 7. REGISTRO DE RESPONSABLES ---------- */
+
+    function responsablesHTML(exp) {
+        const filas = [];
+
+        if ((exp.requeridoPor || "").trim()) {
+            filas.push({
+                responsable: exp.requeridoPor,
+                cargo: exp.cargoRequerido || "—",
+                area: exp.obra || "—",
+                asignacion: fechaMs(exp.creadoEn),
+                cambio: "—"
+            });
+        }
+
+        if ((exp.recibidoPor || "").trim()) {
+            filas.push({
+                responsable: exp.recibidoPor,
+                cargo: exp.cargoRecibido || "—",
+                area: exp.obra || "—",
+                asignacion: fechaMs(exp.entregadoLogisticaEn || exp.actualizadoEn),
+                cambio: "—"
+            });
+        }
+
+        if (filas.length === 0) {
+            return `
+                <article class="pc-card sg-card">
+                    <p class="pc-card-title">Registro de responsables</p>
+                    <div class="pc-empty">No hay responsables registrados para este requerimiento.</div>
+                </article>`;
+        }
+
+        const cuerpo = filas.map((r) => `
+            <tr>
+                <td data-label="Responsable">${esc(r.responsable)}</td>
+                <td data-label="Cargo">${esc(r.cargo)}</td>
+                <td data-label="Área">${esc(r.area)}</td>
+                <td class="zdoc-bj-fecha" data-label="Asignación">${esc(r.asignacion)}</td>
+                <td class="zdoc-bj-fecha" data-label="Cambio">${esc(r.cambio)}</td>
+            </tr>
+        `).join("");
+
+        return `
+            <article class="pc-card sg-card">
+                <p class="pc-card-title">Registro de responsables</p>
+                <div class="zdoc-bj-wrap zv-no-scrollbar">
+                    <table class="zdoc-bj sg-table">
+                        <thead>
+                            <tr>
+                                <th>Responsable</th>
+                                <th>Cargo</th>
+                                <th>Área</th>
+                                <th>Fecha de asignación</th>
+                                <th>Fecha de cambio</th>
+                            </tr>
+                        </thead>
+                        <tbody>${cuerpo}</tbody>
+                    </table>
+                </div>
+            </article>`;
+    }
+
+    /* ---------- 8. EXPEDIENTE VINCULADO ---------- */
+
+    function expedienteHTML(exp) {
+        const generado = esGenerado(exp);
+        const cuerpo = generado
+            ? `<button class="pc-action" type="button" data-sg-act="expediente">
+                    <span class="pc-action-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/><path d="M9.5 12.5h5M9.5 16h5"/></svg>
+                    </span>
+                    Ver Expediente Digital
+               </button>`
+            : `<p class="sg-note">El Expediente Digital se genera al emitir el requerimiento. Aún no hay documento oficial vinculado.</p>`;
+
+        return `
+            <article class="pc-card sg-card">
+                <p class="pc-card-title">Expediente vinculado</p>
+                <div class="sg-exp">${cuerpo}</div>
+            </article>`;
+    }
+
+    /* ---------- 9. ACCIONES DISPONIBLES (sin editar / sin cambiar estados) ---------- */
+
+    function accionBtn(act, etiqueta, icono) {
+        return `
+            <button class="pc-action" type="button" data-sg-act="${act}">
+                <span class="pc-action-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${icono}"/></svg>
+                </span>
+                ${etiqueta}
+            </button>`;
+    }
+
+    function accionesHTML(exp) {
+        const generado = esGenerado(exp);
+        const botones = [];
+
+        botones.push(accionBtn("abrir", "Abrir Requerimiento", "M4 6h16M4 12h16M4 18h10"));
+
+        if (generado) {
+            botones.push(accionBtn("expediente", "Ver Expediente", "M7 4h7l4 4v12H7zM14 4v4h4"));
+            botones.push(accionBtn("documento", "Abrir Documento", "M9 4h6l4 4v12H5V4zM9 4v4h6"));
+        }
+
+        if (exp.enviadoLogistica) {
+            botones.push(accionBtn("archivo", "Ir al Archivo", "M4 7h16M6 7l1 12h10l1-12M10 11v5M14 11v5"));
+        }
+
+        return `
+            <section class="pc-section sg-acciones">
+                <p class="pc-label">Acciones disponibles</p>
+                <div class="pc-actions">${botones.join("")}</div>
+            </section>`;
+    }
+
+    /* ---------- COMPOSICIÓN DE LA VISTA ---------- */
+
+    function trazaHTML(exp) {
+        return `
+            ${identificacionHTML(exp)}
+            ${cronologiaHTML(exp)}
+            ${estadosHTML(exp)}
+            ${observacionesHTML(exp)}
+            ${documentalHTML(exp)}
+            ${responsablesHTML(exp)}
+            ${expedienteHTML(exp)}
+            ${accionesHTML(exp)}`;
+    }
+
+    function render(params) {
+        // Auto-apertura: prioriza el código recibido; si no llega,
+        // reutiliza el último consultado (nunca pide de nuevo el código).
+        if (params && params.codigo) {
+            estado.codigo = params.codigo;
+            estado.filtros = { buscar: "", estado: "", responsable: "", fecha: "" };
+        }
+
+        const exp = estado.codigo ? expediente(estado.codigo) : null;
+        if (!exp) estado.codigo = null;
+
+        // El listado de resultados del Centro de Consulta se muestra
+        // cuando no hay requerimiento abierto o cuando hay una consulta
+        // activa (para elegir otro sin salir del submódulo).
+        const mostrarResultados = !exp || hayFiltroActivo(estado.filtros);
+
+        const consulta = `
+            <section class="sg-consulta">
+                <p class="pc-label">Centro de consulta</p>
+                ${toolbarHTML()}
+                <div class="sg-resultados${mostrarResultados ? "" : " is-hidden"}" id="sg-resultados">
+                    ${resultadosHTML()}
+                </div>
+            </section>`;
+
+        const detalle = exp
+            ? `<div class="sg-detalle" id="sg-detalle">${trazaHTML(exp)}</div>`
+            : `<div class="sg-detalle" id="sg-detalle">
+                    <div class="pc-empty sg-hint">Selecciona un requerimiento en el Centro de consulta para ver su trazabilidad completa.</div>
+               </div>`;
+
+        return `
+            <section class="sg">
+                <header class="sg-head">
+                    <h2 class="sg-title">Seguimiento</h2>
+                    <p class="sg-sub">Centro de trazabilidad del requerimiento. Consulta el recorrido completo, sin editar ni cambiar estados.</p>
+                </header>
+                ${consulta}
+                ${detalle}
+            </section>`;
+    }
+
+    /* ---------- REPINTADO ---------- */
+
+    function repintarTodo() {
+        const ws = document.getElementById("req-workspace");
+        if (!ws) return;
+        ws.innerHTML = render();
+        montar(ws);
+    }
+
+    function leerFiltros() {
+        const val = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
+        estado.filtros = {
+            buscar:      val("sg-buscar"),
+            estado:      val("sg-estado"),
+            responsable: val("sg-responsable"),
+            fecha:       val("sg-fecha")
+        };
+    }
+
+    // Repintado quirúrgico del listado de resultados (preserva el foco
+    // y el estado de los controles de la barra de consulta).
+    function repintarResultados() {
+        const cont = document.getElementById("sg-resultados");
+        if (!cont) return;
+        leerFiltros();
+        cont.classList.remove("is-hidden");
+        cont.innerHTML = resultadosHTML();
+    }
+
+    function seleccionar(codigo) {
+        const exp = expediente(codigo);
+        if (!exp) { toast("No se encontró el requerimiento.", "error"); return; }
+        estado.codigo = codigo;
+        estado.filtros = { buscar: "", estado: "", responsable: "", fecha: "" };
+        repintarTodo();
+    }
+
+    /* ---------- ACCIONES (reutilizan módulos existentes) ---------- */
+
+    function ejecutar(accion) {
+        const codigo = estado.codigo;
+        const exp = codigo ? expediente(codigo) : null;
+        if (!exp) { toast("Selecciona un requerimiento primero.", "error"); return; }
+
+        if (accion === "abrir") {
+            // Lleva a donde el requerimiento se administra realmente.
+            ReqWorkspace.irATab(exp.enviadoLogistica ? "archivo" : "bandeja-trabajo");
+        } else if (accion === "expediente" || accion === "documento") {
+            if (esGenerado(exp)) Documentos.abrirVisor(codigo);
+            else toast("Es un borrador: aún no tiene documento oficial.", "error");
+        } else if (accion === "archivo") {
+            ReqWorkspace.irATab("archivo");
+        }
+    }
+
+    /* ---------- TOAST (reutiliza la estética .zdoc-toast) ---------- */
+
+    function toast(mensaje, tipo) {
+        let t = document.getElementById("sg-toast");
+        if (!t) {
+            t = document.createElement("div");
+            t.id = "sg-toast";
+            t.className = "zdoc-toast";
+            document.body.appendChild(t);
+        }
+        t.className = `zdoc-toast is-${tipo === "error" ? "error" : "ok"} is-visible`;
+        t.textContent = mensaje;
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => { t.classList.remove("is-visible"); }, 3200);
+    }
+
+    /* ---------- MONTAJE / WIRING ---------- */
+
+    function montar(ws) {
+        if (!ws) return;
+
+        // Barra de consulta: repintado quirúrgico del listado.
+        ["sg-buscar", "sg-estado", "sg-responsable", "sg-fecha"].forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const evt = (id === "sg-buscar") ? "input" : "change";
+            el.addEventListener(evt, repintarResultados);
+        });
+
+        // Delegación única sobre la raíz .sg (se reconstruye en cada
+        // render, por lo que no acumula listeners en #req-workspace).
+        const raiz = ws.querySelector(".sg");
+        if (raiz && !raiz.dataset.sgReady) {
+            raiz.dataset.sgReady = "true";
+
+            raiz.addEventListener("click", (evento) => {
+                if (evento.target.closest('[data-sg="refrescar"]')) { repintarTodo(); return; }
+
+                const accionBtn = evento.target.closest("[data-sg-act]");
+                if (accionBtn) { ejecutar(accionBtn.dataset.sgAct); return; }
+
+                const fila = evento.target.closest(".sg-res-row");
+                if (fila) seleccionar(fila.dataset.sgCodigo);
+            });
+
+            // Accesibilidad: Enter sobre una fila de resultados la abre.
+            raiz.addEventListener("keydown", (evento) => {
+                if (evento.key !== "Enter") return;
+                const fila = evento.target.closest(".sg-res-row");
+                if (fila) { evento.preventDefault(); seleccionar(fila.dataset.sgCodigo); }
+            });
+        }
+    }
+
+    return { render, montar };
+})();
+
 const ReqWorkspace = (function () {
 
     function contenedor() {
@@ -4185,6 +4964,9 @@ const ReqWorkspace = (function () {
         } else if (claveTab === "nuevo-requerimiento") {
             ws.innerHTML = NuevoRequerimiento.render();
             NuevoRequerimiento.montar(ws);
+        } else if (claveTab === "seguimiento") {
+            ws.innerHTML = Seguimiento.render(params);
+            Seguimiento.montar(ws);
         } else if (claveTab === "documentos") {
             ws.innerHTML = Documentos.render("documentos");
             Documentos.montar(ws, "documentos");
