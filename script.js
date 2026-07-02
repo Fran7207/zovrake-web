@@ -1712,14 +1712,32 @@ const RequerimientosDB = (function () {
         emitirCambioNotificaciones("nueva");
     }
 
-    function listarNotificaciones() {
-        return leer(K.notificaciones, []).map(normalizarNotificacion);
+    // Vigencia de una notificación: 15 días desde su creación (`en`).
+    // Cumplido ese plazo, deja de estar disponible y se elimina.
+    const NOTIF_VIGENCIA_MS = 15 * 24 * 60 * 60 * 1000;
+
+    // Limpieza automática (sin acción del usuario, sin botón "Eliminar").
+    // Elimina ÚNICAMENTE las notificaciones que superaron los 15 días y
+    // conserva intactas las recientes. Persiste solo si hubo cambios y
+    // devuelve la lista vigente (base única para lectura/conteo/marcado).
+    function purgarNotificacionesVencidas() {
+        const limite = Date.now() - NOTIF_VIGENCIA_MS;
+        const lista = leer(K.notificaciones, []);
+        const vigentes = lista.filter((n) => (n && n.en ? n.en : Date.now()) >= limite);
+        if (vigentes.length !== lista.length) {
+            escribir(K.notificaciones, vigentes);
+        }
+        return vigentes;
     }
 
-    // Marca TODAS las notificaciones como leídas (al entrar al
+    function listarNotificaciones() {
+        return purgarNotificacionesVencidas().map(normalizarNotificacion);
+    }
+
+    // Marca TODAS las notificaciones vigentes como leídas (al entrar al
     // submódulo). Solo persiste y avisa si hubo un cambio real.
     function marcarNotificacionesLeidas() {
-        const lista = leer(K.notificaciones, []).map(normalizarNotificacion);
+        const lista = purgarNotificacionesVencidas().map(normalizarNotificacion);
         let cambio = false;
         lista.forEach((n) => { if (!n.leida) { n.leida = true; cambio = true; } });
         if (cambio) {
@@ -1729,9 +1747,9 @@ const RequerimientosDB = (function () {
         return cambio;
     }
 
-    // Cantidad de notificaciones sin leer (alimenta el contador global).
+    // Cantidad de notificaciones vigentes sin leer (contador global).
     function contarNotificacionesNoLeidas() {
-        return leer(K.notificaciones, [])
+        return purgarNotificacionesVencidas()
             .map(normalizarNotificacion)
             .filter((n) => !n.leida).length;
     }
@@ -5232,7 +5250,7 @@ const Notificaciones = (function () {
             <section class="ntf">
                 <header class="ntf-head">
                     <h2 class="ntf-title">Notificaciones</h2>
-                    <p class="ntf-sub">Eventos importantes del ERP comunicados automáticamente. Abre el módulo correspondiente sin salir del flujo.</p>
+                    <p class="ntf-sub">Mantente al día con las actualizaciones de tus requerimientos.</p>
                 </header>
                 <div class="ntf-layout">
                     <div class="ntf-list" id="ntf-list">${listaHTML()}</div>
